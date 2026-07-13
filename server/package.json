@@ -1,0 +1,20 @@
+{
+  "name": "cgrm-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API de operaciones de Casa Gracia (habitaciones, limpieza, mantenimiento, incidencias)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "migrate": "node --env-file-if-exists=.env src/db.js --migrate",
+    "sync": "node --env-file-if-exists=.env src/db.js --sync",
+    "seed": "node --env-file-if-exists=.env src/db.js --reseed"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.22.0"
+  }
+}
