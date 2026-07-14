@@ -1,15 +1,30 @@
-import { useNavigation } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import { useFocusEffect, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Button, Empty, Pill, SectionTitle, notify } from '../components/ui';
+import { ImageStyle, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import { Button, Chip, Empty, Pill, Screen, SectionTitle, notify } from '../components/ui';
 import { api, type LostItem, type Room } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { useLostStatusMeta, useT } from '../lib/i18n';
-import { colors } from '../lib/theme';
+import { isAtLeast } from '../lib/permissions';
+import { type Colors } from '../lib/theme';
+import { useThemedStyles, useTheme } from '../lib/theme-context';
+
+const STATUS_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  guardado: 'archive-outline',
+  reclamado: 'hand-left-outline',
+  entregado: 'checkmark-done-outline',
+};
 
 export default function ObjetosPerdidos() {
   const navigation = useNavigation();
+  const { user } = useAuth();
   const { t } = useT();
+  const { colors } = useTheme();
+  const s = useThemedStyles(makeStyles);
   const lostStatus = useLostStatusMeta();
+  const canManage = isAtLeast(user, 'lider');
   const [items, setItems] = useState<LostItem[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [showAll, setShowAll] = useState(false);
@@ -30,10 +45,15 @@ export default function ObjetosPerdidos() {
     }
   }, [showAll]);
 
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
   useEffect(() => {
-    load();
     api.get<Room[]>('/api/rooms').then(setRooms).catch(() => {});
-  }, [load]);
+  }, []);
 
   const create = async () => {
     if (!description.trim()) return;
@@ -60,111 +80,110 @@ export default function ObjetosPerdidos() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-      <SectionTitle>{t('lost.new')}</SectionTitle>
-      <View style={styles.form}>
-        <TextInput
-          style={styles.input}
-          placeholder={t('lost.descriptionPlaceholder')}
-          placeholderTextColor={colors.inkSoft}
-          value={description}
-          onChangeText={setDescription}
-        />
-        <Text style={styles.label}>{t('lost.room')}</Text>
-        <View style={styles.chips}>
-          <Pressable
-            onPress={() => setRoomId(null)}
-            style={[styles.chip, roomId === null && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, roomId === null && { color: '#fff' }]}>{t('common.optional')}</Text>
-          </Pressable>
-          {rooms.map((r) => (
-            <Pressable
-              key={r.id}
-              onPress={() => setRoomId(r.id)}
-              style={[styles.chip, roomId === r.id && styles.chipActive]}
-            >
-              <Text style={[styles.chipText, roomId === r.id && { color: '#fff' }]}>{r.name}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Button label={t('lost.new')} onPress={create} loading={creating} disabled={!description.trim()} />
-      </View>
-
-      <Pressable onPress={() => setShowAll((v) => !v)} style={styles.toggle}>
-        <Text style={styles.toggleText}>{showAll ? t('lost.showAll') : t('lost.showOpen')}</Text>
-      </Pressable>
-
-      {items.length === 0 && <Empty text={t('lost.empty')} />}
-      {items.map((item) => {
-        const meta = lostStatus[item.status];
-        return (
-          <View key={item.id} style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.desc}>{item.description}</Text>
-              <Pill label={meta.label} color={meta.color} soft={meta.soft} />
-            </View>
-            <Text style={styles.meta}>
-              {item.room_name ?? '—'} · {t('lost.foundBy')} {item.found_by_name}
-            </Text>
-            {item.claimant ? <Text style={styles.meta}>{t('lost.claimant')}: {item.claimant}</Text> : null}
-            {item.status !== 'entregado' && (
-              <View style={styles.actions}>
-                {item.status === 'guardado' && (
-                  <Button
-                    label={t('lost.markClaimed')}
-                    kind="ghost"
-                    onPress={() => updateStatus(item, 'reclamado')}
-                  />
-                )}
-                <Button label={t('lost.markDelivered')} onPress={() => updateStatus(item, 'entregado')} />
-              </View>
-            )}
+    <Screen>
+      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <SectionTitle>{t('lost.new')}</SectionTitle>
+        <View style={s.form}>
+          <TextInput
+            style={s.input}
+            placeholder={t('lost.descriptionPlaceholder')}
+            placeholderTextColor={colors.inkSoft}
+            value={description}
+            onChangeText={setDescription}
+          />
+          <Text style={s.label}>{t('lost.room')}</Text>
+          <View style={s.chips}>
+            <Chip label={t('common.optional')} active={roomId === null} onPress={() => setRoomId(null)} />
+            {rooms.map((r) => (
+              <Chip key={r.id} label={r.name} active={roomId === r.id} onPress={() => setRoomId(r.id)} />
+            ))}
           </View>
-        );
-      })}
-    </ScrollView>
+          <Button label={t('lost.new')} onPress={create} loading={creating} disabled={!description.trim()} />
+        </View>
+
+        <Pressable onPress={() => setShowAll((v) => !v)} style={s.toggle}>
+          <Text style={s.toggleText}>{showAll ? t('lost.showAll') : t('lost.showOpen')}</Text>
+        </Pressable>
+
+        {items.length === 0 && <Empty text={t('lost.empty')} />}
+        {items.map((item) => {
+          const meta = lostStatus[item.status];
+          return (
+            <View key={item.id} style={s.card}>
+              <View style={s.cardHeader}>
+                {item.photo ? (
+                  <Image source={{ uri: item.photo }} style={s.thumb} contentFit="cover" />
+                ) : (
+                  <View style={s.thumbPlaceholder}>
+                    <Ionicons name={STATUS_ICON[item.status] ?? 'help-outline'} size={20} color={colors.inkSoft} />
+                  </View>
+                )}
+                <Text style={s.desc}>{item.description}</Text>
+                <Pill label={meta.label} color={meta.color} soft={meta.soft} />
+              </View>
+              <Text style={s.meta}>
+                {item.room_name ?? '—'} · {t('lost.foundBy')} {item.found_by_name}
+              </Text>
+              {item.claimant ? <Text style={s.meta}>{t('lost.claimant')}: {item.claimant}</Text> : null}
+              {canManage && item.status !== 'entregado' && (
+                <View style={s.actions}>
+                  {item.status === 'guardado' && (
+                    <Button
+                      label={t('lost.markClaimed')}
+                      kind="ghost"
+                      onPress={() => updateStatus(item, 'reclamado')}
+                    />
+                  )}
+                  <Button label={t('lost.markDelivered')} onPress={() => updateStatus(item, 'entregado')} />
+                </View>
+              )}
+            </View>
+          );
+        })}
+      </ScrollView>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  form: { gap: 10 },
-  label: { fontSize: 13, fontWeight: '700', color: colors.inkSoft, marginTop: 4 },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    fontSize: 16,
-    color: colors.ink,
-    backgroundColor: colors.surface,
-  },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: colors.surface,
-  },
-  chipActive: { backgroundColor: colors.ink, borderColor: 'transparent' },
-  chipText: { fontSize: 13, fontWeight: '700', color: colors.ink },
-  toggle: { paddingVertical: 12, marginTop: 8 },
-  toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' },
-  card: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 8,
-    gap: 4,
-  },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
-  desc: { fontSize: 15, fontWeight: '700', color: colors.ink, flex: 1 },
-  meta: { fontSize: 12, color: colors.inkSoft },
-  actions: { flexDirection: 'row', gap: 8, marginTop: 8 },
-});
+function makeStyles(colors: Colors) {
+  return {
+    screen: { flex: 1 } as ViewStyle,
+    form: { gap: 10 } as ViewStyle,
+    label: { fontSize: 13, fontWeight: '700', color: colors.inkSoft, marginTop: 4 } as TextStyle,
+    input: {
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      minHeight: 48,
+      paddingHorizontal: 14,
+      fontSize: 16,
+      color: colors.ink,
+      backgroundColor: colors.surface,
+    } as TextStyle,
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
+    toggle: { paddingVertical: 12, marginTop: 8 } as ViewStyle,
+    toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
+    card: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      padding: 14,
+      marginBottom: 8,
+      gap: 4,
+    } as ViewStyle,
+    cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 } as ViewStyle,
+    thumb: { width: 40, height: 40, borderRadius: 8, backgroundColor: colors.surfaceSunken } as ImageStyle,
+    thumbPlaceholder: {
+      width: 40,
+      height: 40,
+      borderRadius: 8,
+      backgroundColor: colors.surfaceSunken,
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
+    desc: { fontSize: 15, fontWeight: '700', color: colors.ink, flex: 1 } as TextStyle,
+    meta: { fontSize: 12, color: colors.inkSoft } as TextStyle,
+    actions: { flexDirection: 'row', gap: 8, marginTop: 8 } as ViewStyle,
+  };
+}

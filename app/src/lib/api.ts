@@ -83,6 +83,7 @@ export interface User {
   role: Role;
   // Jefe y admin no tienen área: las cruzan todas.
   area: Area | null;
+  active: boolean;
 }
 
 export interface Room {
@@ -97,7 +98,8 @@ export interface Room {
 }
 
 export type EvidenceKind = 'foto' | 'video';
-export type TaskStatus = 'pendiente' | 'en_curso' | 'hecha' | 'verificada' | 'rechazada' | 'cancelada';
+export type TaskStatus =
+  | 'pendiente' | 'en_curso' | 'hecha' | 'verificada' | 'rechazada' | 'cancelada' | 'vencida' | 'impugnada';
 export type TaskType =
   | 'limpieza' | 'mantenimiento' | 'inspeccion' | 'recepcion' | 'cocina' | 'lavanderia' | 'general';
 
@@ -146,6 +148,9 @@ export interface Task {
   done_at: string | null;
   verified_at: string | null;
   rejected_at: string | null;
+  due_at: string | null;
+  expired_at: string | null;
+  disputed_at: string | null;
   review_note: string;
   reviewed_by: number | null;
   reviewed_by_name: string | null;
@@ -205,6 +210,29 @@ export interface InventoryItem {
   unit: string;
   min_qty: number;
   qty: number;
+}
+
+export type ScheduleFreq = 'una_vez' | 'diaria' | 'semanal' | 'mensual';
+
+export interface TaskSchedule {
+  id: number;
+  room_id: number;
+  room_name: string;
+  room_floor: string;
+  area: Area;
+  type: TaskType;
+  title: string;
+  description: string;
+  priority: string;
+  assignee_id: number | null;
+  assignee_name: string | null;
+  freq: ScheduleFreq;
+  run_hours: number[];
+  date_from: string;
+  date_to: string | null;
+  active: boolean;
+  created_by_name: string;
+  created_at: string;
 }
 
 export interface Message {
