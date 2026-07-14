@@ -1,25 +1,35 @@
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect } from 'expo-router';
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ImageStyle, KeyboardAvoidingView, Platform, Text, TextStyle, View, ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { TextField } from '../components/form';
 import { Button, cardShadow } from '../components/ui';
 import { useAuth } from '../lib/auth';
 import { useT } from '../lib/i18n';
-import { colors } from '../lib/theme';
+import { useFadeSlideIn } from '../lib/motion';
+import { radius, typeScale, type Colors } from '../lib/theme';
+import { useThemedStyles, useTheme } from '../lib/theme-context';
 
 export default function Login() {
   const { user, loading, login } = useAuth();
   const { t } = useT();
+  const { colors, resolved } = useTheme();
+  const s = useThemedStyles(makeStyles);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Entrada escalonada: wordmark -> campos -> botón.
+  const wordmarkAnim = useFadeSlideIn(0);
+  const fieldsAnim = useFadeSlideIn(120);
+  const buttonAnim = useFadeSlideIn(220);
+  const errorAnim = useFadeSlideIn(0);
 
   if (!loading && user) return <Redirect href="/(tabs)" />;
 
@@ -30,96 +40,117 @@ export default function Login() {
       await login(username, password);
     } catch (e: any) {
       setError(e.message ?? t('login.error'));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={styles.card}>
-        <Text style={styles.brand}>CASA GRACIA</Text>
-        <View style={styles.brandRule} />
-        <Text style={styles.subtitle}>{t('login.subtitle')}</Text>
+  // Degradado diagonal de tres paradas: ancla en `bg`, respira por `accentSoft` y
+  // vuelve a oscurecer hacia las esquinas — un fondo editorial, no una mancha plana.
+  const gradientColors: [string, string, string] =
+    resolved === 'dark'
+      ? [colors.bg, colors.accentSoft, '#0B0906']
+      : [colors.bg, colors.accentSoft, colors.bg];
 
-        <TextInput
-          style={styles.input}
-          placeholder={t('login.username')}
-          placeholderTextColor={colors.inkFaint}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={username}
-          onChangeText={setUsername}
-        />
-        <TextInput
-          style={styles.input}
-          placeholder={t('login.password')}
-          placeholderTextColor={colors.inkFaint}
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          onSubmitEditing={submit}
-        />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button label={t('login.submit')} onPress={submit} loading={busy} disabled={!username || !password} />
-      </View>
-    </KeyboardAvoidingView>
+  return (
+    <LinearGradient
+      colors={gradientColors}
+      start={{ x: 0.1, y: 0 }}
+      end={{ x: 0.9, y: 1 }}
+      style={{ flex: 1 }}
+    >
+      <SafeAreaView style={{ flex: 1 }}>
+        <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.card}>
+            <Animated.View style={wordmarkAnim}>
+              <Text style={s.kicker}>{t('login.subtitle')}</Text>
+              <Image
+                source={require('../../assets/images/brand/logo-wordmark.svg')}
+                style={s.wordmark}
+                contentFit="contain"
+                // El lockup es monocromo caramelo; sobre fondo oscuro la marca pide la variante blanca.
+                tintColor={resolved === 'dark' ? colors.onAccent : undefined}
+                accessibilityLabel="Casa Gracia"
+              />
+            </Animated.View>
+
+            <Animated.View style={[s.fields, fieldsAnim]}>
+              <TextField
+                placeholder={t('login.username')}
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={username}
+                onChangeText={setUsername}
+              />
+              <TextField
+                placeholder={t('login.password')}
+                secureTextEntry
+                value={password}
+                onChangeText={setPassword}
+                onSubmitEditing={submit}
+              />
+            </Animated.View>
+
+            {error ? (
+              <Animated.View style={[s.errorBox, errorAnim]}>
+                <Ionicons name="alert-circle" size={16} color={colors.danger} />
+                <Text style={s.errorText}>{error}</Text>
+              </Animated.View>
+            ) : null}
+
+            <Animated.View style={buttonAnim}>
+              <Button label={t('login.submit')} onPress={submit} loading={busy} disabled={!username || !password} />
+            </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </LinearGradient>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 16,
-    padding: 28,
-    gap: 12,
-    width: '100%',
-    maxWidth: 420,
-    alignSelf: 'center',
-    ...cardShadow,
-  },
-  brand: {
-    fontSize: 27,
-    fontWeight: '900',
-    letterSpacing: 5,
-    color: colors.ink,
-    textAlign: 'center',
-  },
-  brandRule: {
-    width: 40,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: colors.accent,
-    alignSelf: 'center',
-    marginTop: 4,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: colors.inkSoft,
-    textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    fontSize: 16,
-    color: colors.ink,
-    backgroundColor: colors.surfaceSunken,
-  },
-  error: { color: colors.danger, fontSize: 13 },
-});
+function makeStyles(colors: Colors) {
+  return {
+    screen: {
+      flex: 1,
+      justifyContent: 'center',
+      padding: 24,
+    } as ViewStyle,
+    card: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.lg,
+      padding: 32,
+      gap: 16,
+      width: '100%',
+      maxWidth: 420,
+      alignSelf: 'center',
+      ...cardShadow(colors),
+    } as ViewStyle,
+    // Overline editorial sobre la marca: la etiqueta de "qué es esto" antes del logo,
+    // no debajo — así el lockup entra como una firma, no como un icono con caption.
+    kicker: {
+      ...typeScale.label,
+      color: colors.accent,
+      textAlign: 'center',
+      marginBottom: 10,
+    } as TextStyle,
+    // Proporción del SVG (988x296 ≈ 3.34:1).
+    wordmark: {
+      width: 240,
+      height: 72,
+      alignSelf: 'center',
+    } as ImageStyle,
+    fields: { gap: 12, marginTop: 18 } as ViewStyle,
+    errorBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: colors.dangerSoft,
+      borderRadius: radius.sm,
+      padding: 10,
+    } as ViewStyle,
+    errorText: { ...typeScale.caption, color: colors.danger, flex: 1 } as TextStyle,
+  };
+}

@@ -1,24 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router';
+import { router, useNavigation } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   Image,
+  ImageStyle,
   Pressable,
   ScrollView,
-  StyleSheet,
   Switch,
   Text,
   TextInput,
+  TextStyle,
   View,
+  ViewStyle,
 } from 'react-native';
-import { Button, SectionTitle, notify } from '../components/ui';
+import { Button, Chip, Screen, SectionTitle, notify } from '../components/ui';
 import { api, type Room } from '../lib/api';
 import { usePriorityMeta, useT } from '../lib/i18n';
-import { colors } from '../lib/theme';
+import { type Colors } from '../lib/theme';
+import { useThemedStyles, useTheme } from '../lib/theme-context';
 
 export default function NuevaIncidencia() {
+  const navigation = useNavigation();
   const { t } = useT();
+  const { colors } = useTheme();
+  const s = useThemedStyles(makeStyles);
   const priority = usePriorityMeta();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomId, setRoomId] = useState<number | null>(null);
@@ -28,6 +34,10 @@ export default function NuevaIncidencia() {
   const [blocks, setBlocks] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    navigation.setOptions({ title: t('newIncident.title') });
+  }, [navigation, t]);
 
   useEffect(() => {
     api.get<Room[]>('/api/rooms').then(setRooms).catch(() => {});
@@ -70,126 +80,108 @@ export default function NuevaIncidencia() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-      <SectionTitle>{t('newIncident.roomZone')}</SectionTitle>
-      <View style={styles.chips}>
-        {rooms.map((r) => (
-          <Pressable
-            key={r.id}
-            onPress={() => setRoomId(r.id)}
-            style={[styles.chip, roomId === r.id && styles.chipActive]}
-          >
-            <Text style={[styles.chipText, roomId === r.id && { color: '#fff' }]}>{r.name}</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <SectionTitle>{t('newIncident.what')}</SectionTitle>
-      <TextInput
-        style={styles.input}
-        placeholder={t('newIncident.whatPlaceholder')}
-        placeholderTextColor={colors.inkSoft}
-        value={title}
-        onChangeText={setTitle}
-      />
-      <TextInput
-        style={[styles.input, { minHeight: 80, textAlignVertical: 'top', marginTop: 8 }]}
-        placeholder={t('newIncident.detailsPlaceholder')}
-        placeholderTextColor={colors.inkSoft}
-        value={description}
-        onChangeText={setDescription}
-        multiline
-      />
-
-      <SectionTitle>{t('newIncident.priority')}</SectionTitle>
-      <View style={styles.chips}>
-        {Object.entries(priority).map(([key, p]) => (
-          <Pressable
-            key={key}
-            onPress={() => setPrio(key)}
-            style={[styles.chip, prio === key && { backgroundColor: p.color, borderColor: 'transparent' }]}
-          >
-            <Text style={[styles.chipText, prio === key && { color: '#fff' }]}>{p.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <View style={styles.blockRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.blockTitle}>{t('newIncident.blockTitle')}</Text>
-          <Text style={styles.blockHint}>{t('newIncident.blockHint')}</Text>
+    <Screen>
+      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <SectionTitle>{t('newIncident.roomZone')}</SectionTitle>
+        <View style={s.chips}>
+          {rooms.map((r) => (
+            <Chip key={r.id} label={r.name} active={roomId === r.id} onPress={() => setRoomId(r.id)} />
+          ))}
         </View>
-        <Switch
-          value={blocks}
-          onValueChange={setBlocks}
-          trackColor={{ true: colors.danger, false: colors.hairline }}
-          thumbColor="#fff"
+
+        <SectionTitle>{t('newIncident.what')}</SectionTitle>
+        <TextInput
+          style={s.input}
+          placeholder={t('newIncident.whatPlaceholder')}
+          placeholderTextColor={colors.inkSoft}
+          value={title}
+          onChangeText={setTitle}
         />
-      </View>
+        <TextInput
+          style={[s.input, { minHeight: 80, textAlignVertical: 'top', marginTop: 8 }]}
+          placeholder={t('newIncident.detailsPlaceholder')}
+          placeholderTextColor={colors.inkSoft}
+          value={description}
+          onChangeText={setDescription}
+          multiline
+        />
 
-      <SectionTitle>{t('newIncident.photo')}</SectionTitle>
-      {photo ? (
-        <View>
-          <Image source={{ uri: photo }} style={styles.photo} />
-          <Pressable onPress={() => setPhoto(null)} style={styles.removePhoto}>
-            <Ionicons name="close-circle" size={28} color={colors.danger} />
-          </Pressable>
+        <SectionTitle>{t('newIncident.priority')}</SectionTitle>
+        <View style={s.chips}>
+          {Object.entries(priority).map(([key, p]) => (
+            <Chip key={key} label={p.label} color={p.color} active={prio === key} onPress={() => setPrio(key)} />
+          ))}
         </View>
-      ) : (
-        <View style={{ flexDirection: 'row', gap: 10 }}>
-          <View style={{ flex: 1 }}>
-            <Button label={t('newIncident.camera')} kind="ghost" onPress={() => pickPhoto(true)} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Button label={t('newIncident.gallery')} kind="ghost" onPress={() => pickPhoto(false)} />
-          </View>
-        </View>
-      )}
 
-      <View style={{ marginTop: 24 }}>
-        <Button label={t('newIncident.submit')} onPress={submit} loading={busy} />
-      </View>
-    </ScrollView>
+        <View style={s.blockRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.blockTitle}>{t('newIncident.blockTitle')}</Text>
+            <Text style={s.blockHint}>{t('newIncident.blockHint')}</Text>
+          </View>
+          <Switch
+            value={blocks}
+            onValueChange={setBlocks}
+            trackColor={{ true: colors.danger, false: colors.hairline }}
+            thumbColor="#fff"
+          />
+        </View>
+
+        <SectionTitle>{t('newIncident.photo')}</SectionTitle>
+        {photo ? (
+          <View>
+            <Image source={{ uri: photo }} style={s.photo} />
+            <Pressable onPress={() => setPhoto(null)} style={s.removePhoto}>
+              <Ionicons name="close-circle" size={28} color={colors.danger} />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <View style={{ flex: 1 }}>
+              <Button label={t('newIncident.camera')} icon="camera-outline" kind="ghost" onPress={() => pickPhoto(true)} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Button label={t('newIncident.gallery')} icon="images-outline" kind="ghost" onPress={() => pickPhoto(false)} />
+            </View>
+          </View>
+        )}
+
+        <View style={{ marginTop: 24 }}>
+          <Button label={t('newIncident.submit')} onPress={submit} loading={busy} />
+        </View>
+      </ScrollView>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: colors.surface,
-  },
-  chipActive: { backgroundColor: colors.ink, borderColor: 'transparent' },
-  chipText: { fontSize: 13, fontWeight: '700', color: colors.ink },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    minHeight: 48,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.ink,
-    backgroundColor: colors.surface,
-  },
-  blockRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 20,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    padding: 14,
-  },
-  blockTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  blockHint: { fontSize: 12, color: colors.inkSoft },
-  photo: { width: '100%', height: 220, borderRadius: 10 },
-  removePhoto: { position: 'absolute', top: 8, right: 8 },
-});
+function makeStyles(colors: Colors) {
+  return {
+    screen: { flex: 1 } as ViewStyle,
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
+    input: {
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      minHeight: 48,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: colors.ink,
+      backgroundColor: colors.surface,
+    } as TextStyle,
+    blockRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginTop: 20,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      padding: 14,
+    } as ViewStyle,
+    blockTitle: { fontSize: 15, fontWeight: '700', color: colors.ink } as TextStyle,
+    blockHint: { fontSize: 12, color: colors.inkSoft } as TextStyle,
+    photo: { width: '100%', height: 220, borderRadius: 10 } as ImageStyle,
+    removePhoto: { position: 'absolute', top: 8, right: 8 } as ViewStyle,
+  };
+}

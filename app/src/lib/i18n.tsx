@@ -1,13 +1,7 @@
 // Sistema de idioma (ES/EN) con persistencia en AsyncStorage.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import {
-  incidentStatusColor,
-  lostStatusColor,
-  priorityColor,
-  roomStatusColor,
-  taskStatusColor,
-} from './theme';
+import { useTheme } from './theme-context';
 
 export type Lang = 'es' | 'en';
 const STORAGE_KEY = 'cgrm.lang';
@@ -20,6 +14,8 @@ const dict = {
     'common.create': 'Crear',
     'common.close': 'Cerrar',
     'common.error': 'Error',
+    'common.retry': 'Reintentar',
+    'common.connectionError': 'No se pudo conectar con el servidor.',
     'common.unassigned': 'Sin asignar',
     'common.send': 'Enviar',
     'common.server': 'Servidor',
@@ -62,6 +58,8 @@ const dict = {
     'taskStatus.verificada': 'Verificada',
     'taskStatus.rechazada': 'Devuelta',
     'taskStatus.cancelada': 'Cancelada',
+    'taskStatus.vencida': 'Vencida',
+    'taskStatus.impugnada': 'Impugnada',
 
     // Tipo de tarea
     'taskType.limpieza': 'Limpieza',
@@ -107,7 +105,6 @@ const dict = {
     'rooms.empty': 'No hay habitaciones en este estado.',
 
     // Detalle de habitación
-    'room.changeStatus': 'Cambiar estado',
     'room.newTask': 'Nueva tarea',
     'room.createTask': 'Crear tarea',
     'room.tasksTitle': 'Tareas',
@@ -116,9 +113,21 @@ const dict = {
     'room.emptyIncidents': 'Sin incidencias en esta habitación.',
     'room.open': 'Abierta',
     'room.resolved': 'Resuelta',
+    'room.taskName': 'Nombre de la tarea',
+    'room.taskNamePlaceholder': 'Ej.: repasar cristales (opcional)',
+    'room.taskDescriptionPlaceholder': 'Descripción (opcional)',
+    'room.schedule': 'Programación',
+    'room.scheduleOnce': 'Única',
+    'room.scheduleRecurrent': 'Recurrente',
+    'room.scheduleDate': 'Programada',
+    'room.scheduleFrom': 'Fecha',
+    'room.scheduleTo': 'Fecha fin (periodo, opcional)',
+    'room.datePlaceholder': 'AAAA-MM-DD',
+    'room.dateInvalid': 'Fecha no válida (formato AAAA-MM-DD)',
+    'room.scheduleCreated': 'Programación creada',
 
     // Tareas (lista)
-    'tasks.empty': 'Sin tareas por ahora. ☀️',
+    'tasks.empty': 'Sin tareas por ahora.',
     'tasks.showAll': 'Mostrando todas · tocar para ver solo abiertas',
     'tasks.showOpen': 'Mostrando abiertas · tocar para ver todas',
     'tasks.breakdown': 'puntos',
@@ -160,7 +169,7 @@ const dict = {
 
     // Revisión (líder / jefe)
     'review.title': 'Revisión',
-    'review.empty': 'Nada pendiente de revisar. 🎉',
+    'review.empty': 'Nada pendiente de revisar.',
     'review.pending': '{n} por revisar',
     'review.approve': 'Verificar y dar por buena',
     'review.reject': 'Devolver al equipo',
@@ -171,15 +180,31 @@ const dict = {
     'review.verifiedBy': 'Verificada por {name}',
     'review.ownWork': 'No puedes revisar tu propio trabajo: lo verifica tu jefe.',
     'review.checkEvidence': 'Revisa las evidencias antes de decidir.',
+    'review.dispute': 'Impugnar verificación',
+    'review.disputePlaceholder': 'Motivo de la impugnación (obligatorio)…',
+    'review.needDisputeNote': 'Escribe el motivo de la impugnación.',
+    'review.disputedBy': 'Impugnada por {name}',
+    'task.overdue': 'Plazo vencido — retómala o cancélala.',
+    'time.minutesAgo': 'hace {n} min',
+    'time.hoursAgo': 'hace {n} h',
+    'time.daysAgo': 'hace {n} d',
 
     // Incidencias
-    'incidents.empty': 'Ninguna incidencia abierta. 🎉',
+    'incidents.empty': 'Ninguna incidencia abierta.',
     'incidents.showAll': 'Mostrando todas · tocar para ver solo abiertas',
     'incidents.showOpen': 'Mostrando abiertas · tocar para ver todas',
     'incidents.blocksRoom': 'bloquea habitación',
     'incidents.report': 'Reportar',
 
+    // Detalle de incidencia
+    'incident.description': 'Descripción',
+    'incident.room': 'Habitación',
+    'incident.linkedTask': 'Ver tarea vinculada',
+    'incident.changeStatus': 'Cambiar estado',
+    'incident.noPhoto': 'Sin foto adjunta.',
+
     // Nueva incidencia
+    'newIncident.title': 'Nueva incidencia',
     'newIncident.roomZone': 'Habitación / zona',
     'newIncident.what': 'Qué pasa',
     'newIncident.whatPlaceholder': 'Ej.: gotea el grifo del lavabo',
@@ -188,8 +213,8 @@ const dict = {
     'newIncident.blockTitle': 'Bloquear habitación',
     'newIncident.blockHint': 'No se puede vender hasta resolver la avería',
     'newIncident.photo': 'Foto',
-    'newIncident.camera': '📷 Cámara',
-    'newIncident.gallery': '🖼 Galería',
+    'newIncident.camera': 'Cámara',
+    'newIncident.gallery': 'Galería',
     'newIncident.submit': 'Reportar incidencia',
     'newIncident.missingTitle': 'Faltan datos',
     'newIncident.missingBody': 'Selecciona la habitación y describe la incidencia.',
@@ -201,6 +226,12 @@ const dict = {
     'profile.inventory': 'Inventario',
     'profile.users': 'Usuarios',
     'profile.reports': 'Reportes',
+
+    // Apariencia
+    'settings.appearance': 'Apariencia',
+    'settings.light': 'Claro',
+    'settings.dark': 'Oscuro',
+    'settings.system': 'Sistema',
 
     // Objetos perdidos
     'lost.title': 'Objetos perdidos',
@@ -243,12 +274,16 @@ const dict = {
     'users.activate': 'Activar',
     'users.empty': 'Sin usuarios.',
     'users.areaHint': 'Empleado y líder trabajan dentro de un área. Jefe y administrador las cruzan todas.',
+    'users.showAll': 'Mostrando todos · tocar para ver solo activos',
+    'users.showActive': 'Mostrando activos · tocar para ver todos',
+    'users.inactive': 'Desactivado',
 
     // Reportes
     'reports.title': 'Reportes',
     'reports.tasksSummary': 'Tareas abiertas',
     'reports.roomsSummary': 'Habitaciones por estado',
     'reports.incidentsOpen': 'Incidencias abiertas',
+    'reports.pendingReview': 'Por revisar',
     'reports.exportTasks': 'Exportar tareas (CSV)',
     'reports.exportIncidents': 'Exportar incidencias (CSV)',
     'reports.exportedTitle': 'Exportado',
@@ -263,6 +298,25 @@ const dict = {
     'bulk.submit': 'Crear {n} tareas',
     'bulk.missingTitle': 'Faltan datos',
     'bulk.missingBody': 'Selecciona al menos una habitación.',
+    'bulk.configure': 'Configurar tarea',
+    'bulk.summary': 'Resumen',
+    'bulk.recurrent': 'Tarea recurrente',
+    'bulk.oneTime': 'Una sola vez',
+    'bulk.frequency': 'Frecuencia',
+    'bulk.hours': 'Horas de ejecución',
+    'bulk.freq.diaria': 'Diaria',
+    'bulk.freq.semanal': 'Semanal',
+    'bulk.freq.mensual': 'Mensual',
+    'bulk.freq.una_vez': 'Una vez',
+
+    // Programaciones (líder+)
+    'schedules.title': 'Programadas',
+    'schedules.empty': 'No hay tareas programadas.',
+    'schedules.cancel': 'Cancelar',
+    'schedules.cancelConfirmTitle': 'Cancelar programación',
+    'schedules.cancelConfirmBody': 'No se generarán más tareas a partir de esta programación.',
+    'schedules.hours': 'a las {hours}',
+    'schedules.until': 'hasta {date}',
   },
   en: {
     'common.cancel': 'Cancel',
@@ -270,6 +324,8 @@ const dict = {
     'common.create': 'Create',
     'common.close': 'Close',
     'common.error': 'Error',
+    'common.retry': 'Retry',
+    'common.connectionError': 'Could not connect to the server.',
     'common.unassigned': 'Unassigned',
     'common.send': 'Send',
     'common.server': 'Server',
@@ -307,6 +363,8 @@ const dict = {
     'taskStatus.verificada': 'Verified',
     'taskStatus.rechazada': 'Sent back',
     'taskStatus.cancelada': 'Cancelled',
+    'taskStatus.vencida': 'Overdue',
+    'taskStatus.impugnada': 'Disputed',
 
     'taskType.limpieza': 'Cleaning',
     'taskType.mantenimiento': 'Maintenance',
@@ -344,7 +402,6 @@ const dict = {
 
     'rooms.empty': 'No rooms in this state.',
 
-    'room.changeStatus': 'Change status',
     'room.newTask': 'New task',
     'room.createTask': 'Create task',
     'room.tasksTitle': 'Tasks',
@@ -353,8 +410,20 @@ const dict = {
     'room.emptyIncidents': 'No incidents for this room.',
     'room.open': 'Open',
     'room.resolved': 'Resolved',
+    'room.taskName': 'Task name',
+    'room.taskNamePlaceholder': 'E.g.: wipe down windows (optional)',
+    'room.taskDescriptionPlaceholder': 'Description (optional)',
+    'room.schedule': 'Schedule',
+    'room.scheduleOnce': 'One-time',
+    'room.scheduleRecurrent': 'Recurring',
+    'room.scheduleDate': 'Scheduled',
+    'room.scheduleFrom': 'Date',
+    'room.scheduleTo': 'End date (period, optional)',
+    'room.datePlaceholder': 'YYYY-MM-DD',
+    'room.dateInvalid': 'Invalid date (use YYYY-MM-DD)',
+    'room.scheduleCreated': 'Schedule created',
 
-    'tasks.empty': 'No tasks right now. ☀️',
+    'tasks.empty': 'No tasks right now.',
     'tasks.showAll': 'Showing all · tap to show open only',
     'tasks.showOpen': 'Showing open · tap to show all',
     'tasks.breakdown': 'items',
@@ -393,7 +462,7 @@ const dict = {
     'evidence.videoTag': 'Video',
 
     'review.title': 'Review',
-    'review.empty': 'Nothing left to review. 🎉',
+    'review.empty': 'Nothing left to review.',
     'review.pending': '{n} to review',
     'review.approve': 'Verify and approve',
     'review.reject': 'Send back to the team',
@@ -404,13 +473,28 @@ const dict = {
     'review.verifiedBy': 'Verified by {name}',
     'review.ownWork': 'You cannot review your own work: your manager verifies it.',
     'review.checkEvidence': 'Check the evidence before deciding.',
+    'review.dispute': 'Dispute verification',
+    'review.disputePlaceholder': 'Reason for the dispute (required)…',
+    'review.needDisputeNote': 'Write why you are disputing it.',
+    'review.disputedBy': 'Disputed by {name}',
+    'task.overdue': 'Deadline passed — resume it or cancel it.',
+    'time.minutesAgo': '{n} min ago',
+    'time.hoursAgo': '{n} h ago',
+    'time.daysAgo': '{n} d ago',
 
-    'incidents.empty': 'No open incidents. 🎉',
+    'incidents.empty': 'No open incidents.',
     'incidents.showAll': 'Showing all · tap to show open only',
     'incidents.showOpen': 'Showing open · tap to show all',
     'incidents.blocksRoom': 'blocks room',
     'incidents.report': 'Report',
 
+    'incident.description': 'Description',
+    'incident.room': 'Room',
+    'incident.linkedTask': 'View linked task',
+    'incident.changeStatus': 'Change status',
+    'incident.noPhoto': 'No photo attached.',
+
+    'newIncident.title': 'New incident',
     'newIncident.roomZone': 'Room / area',
     'newIncident.what': "What's wrong",
     'newIncident.whatPlaceholder': 'E.g.: sink faucet is leaking',
@@ -419,8 +503,8 @@ const dict = {
     'newIncident.blockTitle': 'Block room',
     'newIncident.blockHint': 'Cannot be sold until the issue is resolved',
     'newIncident.photo': 'Photo',
-    'newIncident.camera': '📷 Camera',
-    'newIncident.gallery': '🖼 Gallery',
+    'newIncident.camera': 'Camera',
+    'newIncident.gallery': 'Gallery',
     'newIncident.submit': 'Report incident',
     'newIncident.missingTitle': 'Missing information',
     'newIncident.missingBody': 'Select the room and describe the incident.',
@@ -431,6 +515,12 @@ const dict = {
     'profile.inventory': 'Inventory',
     'profile.users': 'Users',
     'profile.reports': 'Reports',
+
+    // Appearance
+    'settings.appearance': 'Appearance',
+    'settings.light': 'Light',
+    'settings.dark': 'Dark',
+    'settings.system': 'System',
 
     'lost.title': 'Lost & found',
     'lost.new': 'Log item',
@@ -470,11 +560,15 @@ const dict = {
     'users.activate': 'Activate',
     'users.empty': 'No users.',
     'users.areaHint': 'Staff and area leads work inside one area. Heads and admins span all of them.',
+    'users.showAll': 'Showing all · tap to show active only',
+    'users.showActive': 'Showing active · tap to show all',
+    'users.inactive': 'Deactivated',
 
     'reports.title': 'Reports',
     'reports.tasksSummary': 'Open tasks',
     'reports.roomsSummary': 'Rooms by status',
     'reports.incidentsOpen': 'Open incidents',
+    'reports.pendingReview': 'Pending review',
     'reports.exportTasks': 'Export tasks (CSV)',
     'reports.exportIncidents': 'Export incidents (CSV)',
     'reports.exportedTitle': 'Exported',
@@ -488,6 +582,24 @@ const dict = {
     'bulk.submit': 'Create {n} tasks',
     'bulk.missingTitle': 'Missing information',
     'bulk.missingBody': 'Select at least one room.',
+    'bulk.configure': 'Configure task',
+    'bulk.summary': 'Summary',
+    'bulk.recurrent': 'Recurring task',
+    'bulk.oneTime': 'One-time',
+    'bulk.frequency': 'Frequency',
+    'bulk.hours': 'Run times',
+    'bulk.freq.diaria': 'Daily',
+    'bulk.freq.semanal': 'Weekly',
+    'bulk.freq.mensual': 'Monthly',
+    'bulk.freq.una_vez': 'One-time',
+
+    'schedules.title': 'Scheduled',
+    'schedules.empty': 'No scheduled tasks.',
+    'schedules.cancel': 'Cancel',
+    'schedules.cancelConfirmTitle': 'Cancel schedule',
+    'schedules.cancelConfirmBody': 'No more tasks will be generated from this schedule.',
+    'schedules.hours': 'at {hours}',
+    'schedules.until': 'until {date}',
   },
 } as const satisfies Record<Lang, Record<string, string>>;
 
@@ -541,38 +653,45 @@ export function useLabels(prefix: string, keys: string[]): Record<string, string
 }
 
 // Metas traducidas (label + color) para los chips de estado/prioridad en toda la app.
+// Los mapas de color vienen del tema activo (useTheme().statusMaps): cambian
+// solos con el modo claro/oscuro sin que cada pantalla toque nada.
 export function useRoomStatusMeta(): Record<string, { label: string; color: string; soft: string }> {
   const { t } = useT();
+  const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(roomStatusColor).map(([k, v]) => [k, { ...v, label: t(`roomStatus.${k}` as TKey) }])
+    Object.entries(statusMaps.roomStatusColor).map(([k, v]) => [k, { ...v, label: t(`roomStatus.${k}` as TKey) }])
   );
 }
 
 export function useTaskStatusMeta(): Record<string, { label: string; color: string }> {
   const { t } = useT();
+  const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(taskStatusColor).map(([k, v]) => [k, { ...v, label: t(`taskStatus.${k}` as TKey) }])
+    Object.entries(statusMaps.taskStatusColor).map(([k, v]) => [k, { ...v, label: t(`taskStatus.${k}` as TKey) }])
   );
 }
 
 export function usePriorityMeta(): Record<string, { label: string; color: string }> {
   const { t } = useT();
+  const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(priorityColor).map(([k, v]) => [k, { ...v, label: t(`priority.${k}` as TKey) }])
+    Object.entries(statusMaps.priorityColor).map(([k, v]) => [k, { ...v, label: t(`priority.${k}` as TKey) }])
   );
 }
 
 export function useIncidentStatusMeta(): Record<string, { label: string; color: string; soft: string }> {
   const { t } = useT();
+  const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(incidentStatusColor).map(([k, v]) => [k, { ...v, label: t(`incidentStatus.${k}` as TKey) }])
+    Object.entries(statusMaps.incidentStatusColor).map(([k, v]) => [k, { ...v, label: t(`incidentStatus.${k}` as TKey) }])
   );
 }
 
 export function useLostStatusMeta(): Record<string, { label: string; color: string; soft: string }> {
   const { t } = useT();
+  const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(lostStatusColor).map(([k, v]) => [k, { ...v, label: t(`lostStatus.${k}` as TKey) }])
+    Object.entries(statusMaps.lostStatusColor).map(([k, v]) => [k, { ...v, label: t(`lostStatus.${k}` as TKey) }])
   );
 }
 

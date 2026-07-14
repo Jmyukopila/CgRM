@@ -1,14 +1,38 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { Redirect, Tabs } from 'expo-router';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, View, type ColorValue } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useAuth } from '../../lib/auth';
 import { useT } from '../../lib/i18n';
+import { useTabIconBounce } from '../../lib/motion';
 import { isAtLeast } from '../../lib/permissions';
-import { colors } from '../../lib/theme';
+import { fonts } from '../../lib/theme';
+import { useTheme } from '../../lib/theme-context';
+
+function AnimatedTabIcon({
+  name,
+  color,
+  size,
+  focused,
+}: {
+  name: keyof typeof Ionicons.glyphMap;
+  color: ColorValue;
+  size: number;
+  focused: boolean;
+}) {
+  const bounce = useTabIconBounce(focused);
+  return (
+    <Animated.View style={bounce}>
+      <Ionicons name={name} color={color as string} size={size} />
+    </Animated.View>
+  );
+}
 
 export default function TabsLayout() {
   const { user, loading } = useAuth();
   const { t } = useT();
+  const { colors, resolved } = useTheme();
 
   if (loading) {
     return (
@@ -23,8 +47,17 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerStyle: { backgroundColor: colors.bg },
-        headerTitleStyle: { fontWeight: '800', color: colors.ink },
+        headerTitleStyle: { fontFamily: fonts.displaySemibold, fontSize: 18, color: colors.ink },
         headerShadowVisible: false,
+        // Isotipo de marca (monocromo caramelo; en oscuro, variante blanca según brand.md).
+        headerRight: () => (
+          <Image
+            source={require('../../../assets/images/brand/icon-brand.svg')}
+            style={{ width: 26, height: 26, marginRight: 16 }}
+            contentFit="contain"
+            tintColor={resolved === 'dark' ? colors.onAccent : undefined}
+          />
+        ),
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.inkSoft,
         tabBarStyle: {
@@ -43,7 +76,9 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: t('tabs.rooms'),
-          tabBarIcon: ({ color, size }) => <Ionicons name="bed-outline" color={color} size={size} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <AnimatedTabIcon name="bed-outline" color={color} size={size} focused={focused} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -51,8 +86,8 @@ export default function TabsLayout() {
         options={{
           // El empleado ve las suyas; de líder para arriba, el tablón del área.
           title: isAtLeast(user, 'lider') ? t('tabs.tasks') : t('tabs.myTasks'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="checkbox-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <AnimatedTabIcon name="checkbox-outline" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -62,8 +97,8 @@ export default function TabsLayout() {
           title: t('tabs.review'),
           // Revisar es potestad del mando: para el empleado la pestaña no existe.
           href: isAtLeast(user, 'lider') ? undefined : null,
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="shield-checkmark-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <AnimatedTabIcon name="shield-checkmark-outline" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -71,8 +106,8 @@ export default function TabsLayout() {
         name="incidencias"
         options={{
           title: t('tabs.incidents'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="warning-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <AnimatedTabIcon name="warning-outline" color={color} size={size} focused={focused} />
           ),
         }}
       />
@@ -80,8 +115,8 @@ export default function TabsLayout() {
         name="perfil"
         options={{
           title: t('tabs.profile'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person-circle-outline" color={color} size={size} />
+          tabBarIcon: ({ color, size, focused }) => (
+            <AnimatedTabIcon name="person-circle-outline" color={color} size={size} focused={focused} />
           ),
         }}
       />

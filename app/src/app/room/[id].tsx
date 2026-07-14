@@ -1,10 +1,24 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, cardShadow, Empty, Pill, SectionTitle, notify } from '../../components/ui';
+import { Modal, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import Animated from 'react-native-reanimated';
+import {
+  AnimatedPressable,
+  Button,
+  cardShadow,
+  Empty,
+  ErrorState,
+  Pill,
+  Screen,
+  SectionTitle,
+  Skeleton,
+  notify,
+} from '../../components/ui';
 import { api, type Incident, type Room, type Task, type User } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import {
+  useIncidentStatusMeta,
   usePriorityMeta,
   useRoomStatusMeta,
   useRoomTypeLabels,
@@ -12,11 +26,17 @@ import {
   useTaskStatusMeta,
   useTaskTypeLabels,
 } from '../../lib/i18n';
+import { useFadeSlideIn, useStaggerDelay } from '../../lib/motion';
 import { AREA_OF_TYPE, canSupervise, inArea, isAtLeast } from '../../lib/permissions';
-import { colors } from '../../lib/theme';
+import { typeScale, type Colors } from '../../lib/theme';
+import { useThemedStyles, useTheme } from '../../lib/theme-context';
 
 // Tipos de trabajo que se pueden crear sobre una habitación, en orden de uso.
 const TASK_TYPES = ['limpieza', 'inspeccion', 'mantenimiento', 'recepcion', 'cocina', 'lavanderia'];
+const FREQUENCIES = ['diaria', 'semanal', 'mensual'] as const;
+type Frequency = (typeof FREQUENCIES)[number];
+const RUN_HOURS = ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
+type ScheduleMode = 'unica' | 'recurrente' | 'programada';
 
 function Selector<T extends string>({
   options,
@@ -29,15 +49,16 @@ function Selector<T extends string>({
   onChange: (v: T) => void;
   labels: Record<string, string>;
 }) {
+  const s = useThemedStyles(makeStyles);
   return (
-    <View style={styles.selector}>
+    <View style={s.selector}>
       {options.map((opt) => (
         <Pressable
           key={opt}
           onPress={() => onChange(opt)}
-          style={[styles.selectorChip, value === opt && styles.selectorChipActive]}
+          style={[s.selectorChip, value === opt && s.selectorChipActive]}
         >
-          <Text style={[styles.selectorText, value === opt && { color: '#fff' }]}>
+          <Text style={[s.selectorText, value === opt && s.selectorTextActive]}>
             {labels[opt] ?? opt}
           </Text>
         </Pressable>
@@ -46,33 +67,118 @@ function Selector<T extends string>({
   );
 }
 
+function TaskRow({ task, index, stLabel, stColor, typeLabel }: { task: Task; index: number; stLabel: string; stColor: string; typeLabel: string }) {
+  const { t } = useT();
+  const s = useThemedStyles(makeStyles);
+  const fade = useFadeSlideIn(useStaggerDelay(index));
+  return (
+    <Animated.View style={fade}>
+      <AnimatedPressable onPress={() => router.push(`/task/${task.id}`)} style={s.itemRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={s.itemTitle}>{typeLabel}</Text>
+          <Text style={s.itemMeta}>{task.assignee_name ?? t('common.unassigned')}</Text>
+        </View>
+        <Pill label={stLabel} color={stColor} />
+      </AnimatedPressable>
+    </Animated.View>
+  );
+}
+
+function IncidentRow({
+  inc,
+  index,
+  prLabel,
+  stLabel,
+  stColor,
+  stSoft,
+}: {
+  inc: Incident;
+  index: number;
+  prLabel: string;
+  stLabel: string;
+  stColor: string;
+  stSoft: string;
+}) {
+  const s = useThemedStyles(makeStyles);
+  const fade = useFadeSlideIn(useStaggerDelay(index));
+  return (
+    <Animated.View style={fade}>
+      <AnimatedPressable onPress={() => router.push(`/incident/${inc.id}` as any)} style={s.itemRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={s.itemTitle}>{inc.title}</Text>
+          <Text style={s.itemMeta}>
+            {prLabel} · {inc.reported_by_name}
+          </Text>
+        </View>
+        <Pill label={stLabel} color={stColor} soft={stSoft} />
+      </AnimatedPressable>
+    </Animated.View>
+  );
+}
+
 export default function RoomDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const navigation = useNavigation();
   const { t } = useT();
+  const { colors } = useTheme();
+  const s = useThemedStyles(makeStyles);
   const priority = usePriorityMeta();
   const roomStatus = useRoomStatusMeta();
   const roomType = useRoomTypeLabels();
   const taskStatus = useTaskStatusMeta();
   const taskType = useTaskTypeLabels();
-  // Crear trabajo y forzar el estado de una habitación es potestad del mando.
+  const incidentStatus = useIncidentStatusMeta();
+  // Crear trabajo es potestad del mando; el estado de la habitación ya no se fuerza
+  // a mano (lo deriva el servidor del flujo de tareas, ver server/src/index.js).
   const isSupervisor = isAtLeast(user, 'lider');
 
   const [room, setRoom] = useState<Room | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [staff, setStaff] = useState<User[]>([]);
+  const [loadError, setLoadError] = useState(false);
 
   // Cada quien solo puede crear trabajo del área que supervisa: el líder de limpieza
   // no reparte órdenes de mantenimiento.
   const creatableTypes = TASK_TYPES.filter((type) => canSupervise(user, AREA_OF_TYPE[type]));
 
-  // Formulario de nueva tarea (líder / jefe)
+  // Formulario de nueva tarea (líder / jefe), dentro del menú emergente
+  const [modalOpen, setModalOpen] = useState(false);
   const [newType, setNewType] = useState<string>(creatableTypes[0] ?? 'limpieza');
   const [newPriority, setNewPriority] = useState('media');
   const [newAssignee, setNewAssignee] = useState<number | null>(null);
+  const [newTitle, setNewTitle] = useState('');
+  const [newDescription, setNewDescription] = useState('');
+  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('unica');
+  const [freq, setFreq] = useState<Frequency>('diaria');
+  const [hours, setHours] = useState<Set<string>>(new Set(['10:00']));
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [creating, setCreating] = useState(false);
+
+  const scheduleLabels: Record<ScheduleMode, string> = {
+    unica: t('room.scheduleOnce'),
+    recurrente: t('room.scheduleRecurrent'),
+    programada: t('room.scheduleDate'),
+  };
+  const freqLabels: Record<Frequency, string> = {
+    diaria: t('bulk.freq.diaria'),
+    semanal: t('bulk.freq.semanal'),
+    mensual: t('bulk.freq.mensual'),
+  };
+
+  const toggleHour = (h: string) => {
+    setHours((prev) => {
+      const next = new Set(prev);
+      if (next.has(h)) {
+        if (next.size > 1) next.delete(h); // siempre queda al menos una hora
+      } else {
+        next.add(h);
+      }
+      return next;
+    });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -84,8 +190,9 @@ export default function RoomDetail() {
       setRoom(rooms.find((r) => String(r.id) === id) ?? null);
       setTasks(roomTasks);
       setIncidents(roomIncidents);
+      setLoadError(false);
     } catch {
-      // reintento en el siguiente foco
+      setLoadError(true);
     }
   }, [id]);
 
@@ -103,19 +210,77 @@ export default function RoomDetail() {
     if (room) navigation.setOptions({ title: room.name });
   }, [room, navigation]);
 
-  if (!room) return null;
+  if (!room) {
+    if (loadError) {
+      return (
+        <Screen>
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+          </View>
+        </Screen>
+      );
+    }
+    return (
+      <Screen>
+        <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="text" width="60%" height={30} />
+          <Skeleton variant="text" width="40%" />
+          <Skeleton variant="card" height={120} />
+          <Skeleton variant="card" height={120} />
+        </ScrollView>
+      </Screen>
+    );
+  }
   const meta = roomStatus[room.status];
 
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
   const createTask = async () => {
+    const base = {
+      room_id: room.id,
+      type: newType,
+      title: newTitle.trim(),
+      description: newDescription.trim(),
+      priority: newPriority,
+      assignee_id: newAssignee,
+    };
+
+    if (scheduleMode === 'programada' && !DATE_RE.test(dateFrom.trim())) {
+      notify(t('common.error'), t('room.dateInvalid'));
+      return;
+    }
+    if (scheduleMode === 'programada' && dateTo.trim() && !DATE_RE.test(dateTo.trim())) {
+      notify(t('common.error'), t('room.dateInvalid'));
+      return;
+    }
+
     setCreating(true);
     try {
-      await api.post('/api/tasks', {
-        room_id: room.id,
-        type: newType,
-        priority: newPriority,
-        assignee_id: newAssignee,
-      });
+      if (scheduleMode === 'unica') {
+        await api.post('/api/tasks', base);
+      } else if (scheduleMode === 'recurrente') {
+        await api.post('/api/task-schedules', {
+          ...base,
+          freq,
+          run_hours: [...hours].map((h) => parseInt(h, 10)),
+        });
+        notify(t('room.scheduleCreated'));
+      } else {
+        await api.post('/api/task-schedules', {
+          ...base,
+          freq: 'una_vez',
+          date_from: dateFrom.trim(),
+          date_to: dateTo.trim() || undefined,
+        });
+        notify(t('room.scheduleCreated'));
+      }
+      setModalOpen(false);
       setNewAssignee(null);
+      setNewTitle('');
+      setNewDescription('');
+      setScheduleMode('unica');
+      setDateFrom('');
+      setDateTo('');
       await load();
     } catch (e: any) {
       notify(t('common.error'), e.message);
@@ -128,160 +293,272 @@ export default function RoomDetail() {
   const assignableStaff = staff.filter((s) => inArea(s, AREA_OF_TYPE[newType]));
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.roomName}>{room.name}</Text>
-          <Text style={styles.roomMeta}>
-            {room.floor} · {roomType[room.type]}
-          </Text>
-        </View>
-        <Pill label={meta.label} color={meta.color} soft={meta.soft} />
-      </View>
-
-      {isSupervisor && (
-        <>
-          <SectionTitle>{t('room.changeStatus')}</SectionTitle>
-          <View style={styles.selector}>
-            {Object.entries(roomStatus).map(([key, st]) => (
-              <Pressable
-                key={key}
-                onPress={async () => {
-                  try {
-                    await api.patch(`/api/rooms/${room.id}`, { status: key });
-                    await load();
-                  } catch (e: any) {
-                    notify(t('common.error'), e.message);
-                  }
-                }}
-                style={[
-                  styles.selectorChip,
-                  room.status === key && { backgroundColor: st.color, borderColor: 'transparent' },
-                ]}
-              >
-                <Text style={[styles.selectorText, room.status === key && { color: '#fff' }]}>
-                  {st.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <SectionTitle>{t('room.newTask')}</SectionTitle>
-          <View style={styles.form}>
-            <Selector
-              options={creatableTypes}
-              value={newType}
-              onChange={(v) => {
-                setNewType(v);
-                setNewAssignee(null);
-              }}
-              labels={taskType}
-            />
-            <Selector
-              options={['baja', 'media', 'alta', 'urgente']}
-              value={newPriority}
-              onChange={setNewPriority}
-              labels={Object.fromEntries(Object.entries(priority).map(([k, v]) => [k, v.label]))}
-            />
-            <View style={styles.selector}>
-              <Pressable
-                onPress={() => setNewAssignee(null)}
-                style={[styles.selectorChip, newAssignee === null && styles.selectorChipActive]}
-              >
-                <Text style={[styles.selectorText, newAssignee === null && { color: '#fff' }]}>
-                  {t('common.unassigned')}
-                </Text>
-              </Pressable>
-              {assignableStaff.map((s) => (
-                <Pressable
-                  key={s.id}
-                  onPress={() => setNewAssignee(s.id)}
-                  style={[styles.selectorChip, newAssignee === s.id && styles.selectorChipActive]}
-                >
-                  <Text style={[styles.selectorText, newAssignee === s.id && { color: '#fff' }]}>
-                    {s.name}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <Button label={t('room.createTask')} onPress={createTask} loading={creating} />
-          </View>
-        </>
-      )}
-
-      <SectionTitle>{t('room.tasksTitle')}</SectionTitle>
-      {tasks.length === 0 && <Empty text={t('room.emptyTasks')} />}
-      {tasks.map((task) => {
-        const st = taskStatus[task.status];
-        return (
-          <Pressable
-            key={task.id}
-            onPress={() => router.push(`/task/${task.id}`)}
-            style={({ pressed }) => [styles.itemRow, pressed && { opacity: 0.7 }]}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemTitle}>{taskType[task.type]}</Text>
-              <Text style={styles.itemMeta}>{task.assignee_name ?? t('common.unassigned')}</Text>
-            </View>
-            <Pill label={st.label} color={st.color} />
-          </Pressable>
-        );
-      })}
-
-      <SectionTitle>{t('room.incidentsTitle')}</SectionTitle>
-      {incidents.length === 0 && <Empty text={t('room.emptyIncidents')} />}
-      {incidents.map((inc) => (
-        <Pressable
-          key={inc.id}
-          onPress={() => inc.task_id && router.push(`/task/${inc.task_id}`)}
-          style={({ pressed }) => [styles.itemRow, pressed && { opacity: 0.7 }]}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={styles.itemTitle}>{inc.title}</Text>
-            <Text style={styles.itemMeta}>
-              {priority[inc.priority].label} · {inc.reported_by_name}
+    <Screen>
+      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        <View style={s.header}>
+          <View>
+            <Text style={s.roomName}>{room.name}</Text>
+            <Text style={s.roomMeta}>
+              {room.floor} · {roomType[room.type]}
             </Text>
           </View>
-          <Pill
-            label={inc.status === 'resuelta' ? t('room.resolved') : t('room.open')}
-            color={inc.status === 'resuelta' ? colors.success : colors.danger}
-            soft={inc.status === 'resuelta' ? colors.successSoft : colors.dangerSoft}
+          <Pill label={meta.label} color={meta.color} soft={meta.soft} />
+        </View>
+
+        {isSupervisor && (
+          <>
+            <SectionTitle>{t('room.newTask')}</SectionTitle>
+            <Button label={t('room.createTask')} icon="add" onPress={() => setModalOpen(true)} />
+          </>
+        )}
+
+        <SectionTitle>{t('room.tasksTitle')}</SectionTitle>
+        {tasks.length === 0 && <Empty text={t('room.emptyTasks')} />}
+        {tasks.map((task, i) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            index={i}
+            stLabel={taskStatus[task.status].label}
+            stColor={taskStatus[task.status].color}
+            typeLabel={taskType[task.type]}
           />
-        </Pressable>
-      ))}
-    </ScrollView>
+        ))}
+
+        <SectionTitle>{t('room.incidentsTitle')}</SectionTitle>
+        {incidents.length === 0 && <Empty text={t('room.emptyIncidents')} />}
+        {incidents.map((inc, i) => (
+          <IncidentRow
+            key={inc.id}
+            inc={inc}
+            index={i}
+            prLabel={priority[inc.priority].label}
+            stLabel={incidentStatus[inc.status].label}
+            stColor={incidentStatus[inc.status].color}
+            stSoft={incidentStatus[inc.status].soft}
+          />
+        ))}
+      </ScrollView>
+
+      <Modal
+        visible={modalOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setModalOpen(false)}
+      >
+        <View style={s.backdrop}>
+          <Pressable style={{ flex: 1 }} onPress={() => setModalOpen(false)} />
+          <View style={s.sheet}>
+            <View style={s.sheetHandle} />
+            <View style={s.sheetHeader}>
+              <Text style={s.sheetTitle}>{t('room.newTask')}</Text>
+              <Pressable onPress={() => setModalOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.inkSoft} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 8, gap: 10 }}>
+              <Selector
+                options={creatableTypes}
+                value={newType}
+                onChange={(v) => {
+                  setNewType(v);
+                  setNewAssignee(null);
+                }}
+                labels={taskType}
+              />
+              <Selector
+                options={['baja', 'media', 'alta', 'urgente']}
+                value={newPriority}
+                onChange={setNewPriority}
+                labels={Object.fromEntries(Object.entries(priority).map(([k, v]) => [k, v.label]))}
+              />
+              <View style={s.selector}>
+                <Pressable
+                  onPress={() => setNewAssignee(null)}
+                  style={[s.selectorChip, newAssignee === null && s.selectorChipActive]}
+                >
+                  <Text style={[s.selectorText, newAssignee === null && s.selectorTextActive]}>
+                    {t('common.unassigned')}
+                  </Text>
+                </Pressable>
+                {assignableStaff.map((staffMember) => (
+                  <Pressable
+                    key={staffMember.id}
+                    onPress={() => setNewAssignee(staffMember.id)}
+                    style={[s.selectorChip, newAssignee === staffMember.id && s.selectorChipActive]}
+                  >
+                    <Text style={[s.selectorText, newAssignee === staffMember.id && s.selectorTextActive]}>
+                      {staffMember.name}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <SectionTitle>{t('room.taskName')}</SectionTitle>
+              <TextInput
+                style={s.input}
+                placeholder={t('room.taskNamePlaceholder')}
+                placeholderTextColor={colors.inkFaint}
+                value={newTitle}
+                onChangeText={setNewTitle}
+              />
+              <TextInput
+                style={[s.input, s.textArea]}
+                placeholder={t('room.taskDescriptionPlaceholder')}
+                placeholderTextColor={colors.inkFaint}
+                value={newDescription}
+                onChangeText={setNewDescription}
+                multiline
+              />
+
+              <SectionTitle>{t('room.schedule')}</SectionTitle>
+              <View style={s.selector}>
+                {(['unica', 'recurrente', 'programada'] as ScheduleMode[]).map((mode) => (
+                  <Pressable
+                    key={mode}
+                    onPress={() => setScheduleMode(mode)}
+                    style={[s.selectorChip, scheduleMode === mode && s.selectorChipActive]}
+                  >
+                    <Text style={[s.selectorText, scheduleMode === mode && s.selectorTextActive]}>
+                      {scheduleLabels[mode]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {scheduleMode === 'recurrente' && (
+                <>
+                  <SectionTitle>{t('bulk.frequency')}</SectionTitle>
+                  <View style={s.selector}>
+                    {FREQUENCIES.map((f) => (
+                      <Pressable
+                        key={f}
+                        onPress={() => setFreq(f)}
+                        style={[s.selectorChip, freq === f && s.selectorChipActive]}
+                      >
+                        <Text style={[s.selectorText, freq === f && s.selectorTextActive]}>{freqLabels[f]}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  <SectionTitle>{t('bulk.hours')}</SectionTitle>
+                  <View style={s.selector}>
+                    {RUN_HOURS.map((h) => (
+                      <Pressable
+                        key={h}
+                        onPress={() => toggleHour(h)}
+                        style={[s.selectorChip, hours.has(h) && s.selectorChipActive]}
+                      >
+                        <Text style={[s.selectorText, hours.has(h) && s.selectorTextActive]}>{h}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </>
+              )}
+
+              {scheduleMode === 'programada' && (
+                <>
+                  <SectionTitle>{t('room.scheduleFrom')}</SectionTitle>
+                  <TextInput
+                    style={s.input}
+                    placeholder={t('room.datePlaceholder')}
+                    placeholderTextColor={colors.inkFaint}
+                    value={dateFrom}
+                    onChangeText={setDateFrom}
+                  />
+                  <SectionTitle>{t('room.scheduleTo')}</SectionTitle>
+                  <TextInput
+                    style={s.input}
+                    placeholder={t('room.datePlaceholder')}
+                    placeholderTextColor={colors.inkFaint}
+                    value={dateTo}
+                    onChangeText={setDateTo}
+                  />
+                </>
+              )}
+            </ScrollView>
+
+            <View style={s.sheetFooter}>
+              <Button label={t('room.createTask')} onPress={createTask} loading={creating} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  roomName: { fontSize: 30, fontWeight: '900', color: colors.ink, letterSpacing: -0.5 },
-  roomMeta: { fontSize: 14, color: colors.inkSoft },
-  selector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  selectorChip: {
-    borderWidth: 1,
-    borderColor: colors.hairlineStrong,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: colors.surface,
-  },
-  selectorChipActive: { backgroundColor: colors.ink, borderColor: 'transparent' },
-  selectorText: { fontSize: 13, fontWeight: '700', color: colors.ink },
-  form: { gap: 10 },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 8,
-    ...cardShadow,
-  },
-  itemTitle: { fontSize: 15, fontWeight: '700', color: colors.ink },
-  itemMeta: { fontSize: 12, color: colors.inkSoft },
-});
+function makeStyles(colors: Colors) {
+  return {
+    screen: { flex: 1 } as ViewStyle,
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' } as ViewStyle,
+    roomName: { ...typeScale.display, fontSize: 32, lineHeight: 36, color: colors.ink } as TextStyle,
+    roomMeta: { ...typeScale.body, color: colors.inkSoft } as TextStyle,
+    selector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
+    selectorChip: {
+      borderWidth: 1,
+      borderColor: colors.hairlineStrong,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: colors.surface,
+    } as ViewStyle,
+    selectorChipActive: { backgroundColor: colors.ink, borderColor: 'transparent' } as ViewStyle,
+    selectorText: { fontSize: 13, fontWeight: '700', color: colors.ink } as TextStyle,
+    // Sobre fondo `ink` el texto legible en ambos temas es `bg`, no blanco fijo
+    // (en oscuro `ink` es un tono claro: blanco fijo quedaría invisible).
+    selectorTextActive: { color: colors.bg } as TextStyle,
+    itemRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 14,
+      padding: 12,
+      marginBottom: 8,
+      ...cardShadow(colors),
+    } as ViewStyle,
+    itemTitle: { fontSize: 15, fontWeight: '700', color: colors.ink } as TextStyle,
+    itemMeta: { fontSize: 12, color: colors.inkSoft } as TextStyle,
+    input: {
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      minHeight: 48,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: colors.ink,
+    } as TextStyle,
+    textArea: { minHeight: 80, textAlignVertical: 'top' } as TextStyle,
+    backdrop: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' } as ViewStyle,
+    sheet: {
+      backgroundColor: colors.bg,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      paddingBottom: 24,
+      maxHeight: '88%',
+    } as ViewStyle,
+    sheetHandle: {
+      alignSelf: 'center',
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.hairlineStrong,
+      marginBottom: 8,
+    } as ViewStyle,
+    sheetHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 4,
+    } as ViewStyle,
+    sheetTitle: { fontSize: 18, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 } as TextStyle,
+    sheetFooter: { marginTop: 12 } as ViewStyle,
+  };
+}
