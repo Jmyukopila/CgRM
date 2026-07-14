@@ -24,7 +24,97 @@ const PORT = process.env.PORT || 4000;
 
 // --- Helpers ----------------------------------------------------------------
 
-const ROOM_STATUSES = ['sucia', 'en_limpieza', 'pendiente_inspeccion', 'lista', 'bloqueada'];
+// Plazo automático por prioridad: pasado sin completar, el barrido periódico
+// marca la tarea como 'vencida' sin que nadie tenga que tocarla a mano.
+const TASK_SLA_HOURS = { urgente: 4, alta: 24, media: 48, baja: 96 };
+const VALID_PRIORITIES = Object.keys(TASK_SLA_HOURS);
+
+// Zona horaria del hotel: todo el cálculo de "día/hora local" para tareas programadas
+// se hace en Postgres con esta zona, nunca con la hora del proceso Node.
+const HOTEL_TZ = 'America/Bogota';
+
+// Barre tareas abiertas cuyo plazo ya pasó y las marca 'vencida'. Se llama al
+// arrancar, cada pocos minutos en segundo plano, y de forma perezosa antes de
+// servir listados para que quien mira el tablón vea el estado ya actualizado.
+async function sweepExpiredTasks() {
+  // Si la limpieza que dejó la habitación en 'en_limpieza' vence sin terminar, la
+  // habitación se queda huérfana en ese estado para siempre si nadie la recalcula
+  // (el barrido solo tocaba la tarea). Aquí se marca 'sucia' salvo que otra limpieza
+  // siga en curso sobre la misma habitación o esté bloqueada por una incidencia.
+  await exec(
+    `WITH expired AS (
+       SELECT id, room_id, type, status AS prev_status FROM tasks
+       WHERE status = ANY($1) AND due_at IS NOT NULL AND due_at < now()
+     ),
+     marked AS (
+       UPDATE tasks SET status = 'vencida', expired_at = now()
+       WHERE id IN (SELECT id FROM expired)
+     )
+     UPDATE rooms r SET status = 'sucia'
+     FROM expired e
+     WHERE r.id = e.room_id AND e.type = 'limpieza' AND e.prev_status = 'en_curso'
+       AND r.status = 'en_limpieza'
+       AND NOT EXISTS (
+         SELECT 1 FROM tasks t2
+         WHERE t2.room_id = r.id AND t2.type = 'limpieza' AND t2.status = 'en_curso'
+           AND t2.id NOT IN (SELECT id FROM expired)
+       )`,
+    [EXPIRABLE_STATUSES]
+  );
+}
+
+// Materializa en tasks reales las programaciones (task_schedules) cuya hora local ya
+// llegó hoy y que aún no tienen instancia para ese slot exacto. Se llama al arrancar
+// y cada pocos minutos, igual que sweepExpiredTasks; NO de forma perezosa por
+// petición (crear tareas es más caro que un UPDATE y unos minutos de demora no
+// importan aquí). La idempotencia real la da el índice único parcial de
+// tasks(schedule_id, scheduled_slot) + ON CONFLICT DO NOTHING en createTask: el
+// NOT EXISTS de abajo solo evita trabajo repetido, no es la garantía.
+async function runTaskSchedules() {
+  const due = await all(
+    `WITH local AS (
+       SELECT (now() AT TIME ZONE $1)::date AS today,
+              extract(hour FROM now() AT TIME ZONE $1)::int AS hour
+     )
+     SELECT s.*, h.run_hour,
+            ((l.today + make_interval(hours => h.run_hour))::timestamp AT TIME ZONE $1) AS slot_at
+     FROM task_schedules s
+     CROSS JOIN local l
+     CROSS JOIN LATERAL unnest(s.run_hours) AS h(run_hour)
+     WHERE s.active
+       AND l.today >= s.date_from
+       AND (s.freq = 'una_vez' OR s.date_to IS NULL OR l.today <= s.date_to)
+       AND h.run_hour <= l.hour
+       AND (
+         s.freq = 'diaria'
+         OR (s.freq = 'semanal' AND extract(dow FROM l.today) = extract(dow FROM s.date_from))
+         OR (s.freq = 'mensual' AND extract(day FROM l.today) = extract(day FROM s.date_from))
+         OR (s.freq = 'una_vez' AND l.today = s.date_from)
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM tasks t
+         WHERE t.schedule_id = s.id
+           AND t.scheduled_slot = ((l.today + make_interval(hours => h.run_hour))::timestamp AT TIME ZONE $1)
+       )
+     ORDER BY s.id, h.run_hour`,
+    [HOTEL_TZ]
+  );
+
+  for (const s of due) {
+    const room = await getRoom(s.room_id);
+    if (!room) continue;
+    const taskId = await createTask({
+      room, area: s.area, type: s.type, title: s.title, description: s.description,
+      priority: s.priority, assignee_id: s.assignee_id, createdBy: s.created_by,
+      scheduleId: s.id, scheduledSlot: s.slot_at,
+      dueAt: s.freq === 'una_vez' && s.date_to ? { endOfLocalDay: s.date_to } : null,
+    });
+    // Una programación 'una_vez' solo produce una instancia; hecha, se autodesactiva.
+    if (taskId && s.freq === 'una_vez') {
+      await exec('UPDATE task_schedules SET active = false WHERE id = $1', [s.id]);
+    }
+  }
+}
 
 // Express 4 no captura el rechazo de un handler async: sin esto, un error de la
 // base dejaría la petición colgada en vez de responder 500.
@@ -59,7 +149,8 @@ async function getTaskFull(id) {
   if (!task) return null;
   task.items = await all(
     `SELECT i.id, i.text, i.done, i.position, i.requires_evidence, i.evidence_kind, i.min_evidence,
-            (SELECT COUNT(*)::int FROM evidence e WHERE e.task_item_id = i.id) AS evidence_count
+            (SELECT COUNT(*)::int FROM evidence e WHERE e.task_item_id = i.id
+               AND (i.evidence_kind = 'cualquiera' OR e.kind = i.evidence_kind)) AS evidence_count
      FROM task_items i WHERE i.task_id = $1 ORDER BY i.position`,
     [id]
   );
@@ -71,10 +162,12 @@ async function getTaskFull(id) {
 function pendingEvidence(taskId) {
   return all(
     `SELECT i.id, i.text, i.min_evidence,
-            (SELECT COUNT(*)::int FROM evidence e WHERE e.task_item_id = i.id) AS evidence_count
+            (SELECT COUNT(*)::int FROM evidence e WHERE e.task_item_id = i.id
+               AND (i.evidence_kind = 'cualquiera' OR e.kind = i.evidence_kind)) AS evidence_count
      FROM task_items i
      WHERE i.task_id = $1 AND i.requires_evidence
-       AND (SELECT COUNT(*) FROM evidence e WHERE e.task_item_id = i.id) < i.min_evidence
+       AND (SELECT COUNT(*) FROM evidence e WHERE e.task_item_id = i.id
+              AND (i.evidence_kind = 'cualquiera' OR e.kind = i.evidence_kind)) < i.min_evidence
      ORDER BY i.position`,
     [taskId]
   );
@@ -131,9 +224,11 @@ app.post('/api/push-tokens', h(async (req, res) => {
 
 // El líder ve a su equipo; jefe y admin ven la plantilla entera.
 app.get('/api/users', requireRank('lider'), h(async (req, res) => {
+  // Solo quien da de alta/reactiva personal necesita ver a quien está desactivado.
+  const activeFilter = req.query.include_inactive === '1' && canManageUsers(req.user) ? '' : 'AND active';
   const users = seesAllAreas(req.user)
-    ? await all('SELECT * FROM users WHERE active ORDER BY area NULLS FIRST, name')
-    : await all('SELECT * FROM users WHERE active AND area = $1 ORDER BY name', [req.user.area]);
+    ? await all(`SELECT * FROM users WHERE true ${activeFilter} ORDER BY area NULLS FIRST, name`)
+    : await all(`SELECT * FROM users WHERE area = $1 ${activeFilter} ORDER BY name`, [req.user.area]);
   res.json(users.map(publicUser));
 }));
 
@@ -199,29 +294,27 @@ app.patch('/api/users/:id', h(async (req, res) => {
 // --- Habitaciones -----------------------------------------------------------
 
 app.get('/api/rooms', h(async (_req, res) => {
+  await sweepExpiredTasks();
   const rooms = await all(
     `SELECT r.*,
       (SELECT COUNT(*) FROM tasks t WHERE t.room_id = r.id
-         AND t.status IN ('pendiente','en_curso','rechazada'))::int AS open_tasks,
+         AND t.status = ANY($1))::int AS open_tasks,
       (SELECT COUNT(*) FROM incidents i WHERE i.room_id = r.id
          AND i.status != 'resuelta')::int AS open_incidents
      FROM rooms r
-     ORDER BY r.floor, r.name`
+     ORDER BY r.floor, r.name`,
+    [OPEN_TASK_STATUSES]
   );
   res.json(rooms);
 }));
 
-// Forzar el estado de una habitación es una decisión de mando: el flujo normal lo deriva
-// del trabajo hecho.
+// El estado de la habitación ya no se fuerza a mano: lo deriva por completo el
+// flujo de tareas (ver PATCH /api/tasks/:id).
 app.patch('/api/rooms/:id', requireRank('lider'), h(async (req, res) => {
   const id = toId(req.params.id);
   const room = id && (await getRoom(id));
   if (!room) return res.status(404).json({ error: 'Habitación no encontrada' });
-  const { status, notes } = req.body || {};
-  if (status !== undefined && !ROOM_STATUSES.includes(status)) {
-    return res.status(400).json({ error: 'Estado de habitación no válido' });
-  }
-  if (status !== undefined) await setRoomStatus(room.id, status);
+  const { notes } = req.body || {};
   if (notes !== undefined) await exec('UPDATE rooms SET notes = $1 WHERE id = $2', [String(notes), room.id]);
   res.json(await getRoom(room.id));
 }));
@@ -229,6 +322,7 @@ app.patch('/api/rooms/:id', requireRank('lider'), h(async (req, res) => {
 // --- Tareas -----------------------------------------------------------------
 
 app.get('/api/tasks', h(async (req, res) => {
+  await sweepExpiredTasks();
   const clauses = [];
   const params = [];
 
@@ -250,7 +344,7 @@ app.get('/api/tasks', h(async (req, res) => {
     clauses.push(`t.room_id = $${params.push(toId(req.query.room_id))}`);
   }
   if (req.query.status === 'abiertas') {
-    clauses.push(`t.status IN ('pendiente','en_curso','rechazada')`);
+    clauses.push(`t.status = ANY($${params.push(OPEN_TASK_STATUSES)})`);
   } else if (req.query.status === 'revision') {
     clauses.push(`t.status = 'hecha'`);
   } else if (req.query.status) {
@@ -268,7 +362,7 @@ app.get('/api/tasks', h(async (req, res) => {
      LEFT JOIN users u ON u.id = t.assignee_id
      ${where}
      ORDER BY CASE t.status
-                WHEN 'rechazada' THEN 0 WHEN 'en_curso' THEN 1
+                WHEN 'vencida' THEN 0 WHEN 'impugnada' THEN 0 WHEN 'rechazada' THEN 0 WHEN 'en_curso' THEN 1
                 WHEN 'hecha' THEN 2 WHEN 'pendiente' THEN 3 ELSE 4 END,
               CASE t.priority WHEN 'urgente' THEN 0 WHEN 'alta' THEN 1 WHEN 'media' THEN 2 ELSE 3 END,
               t.created_at DESC`,
@@ -290,15 +384,38 @@ const TASK_TITLES = {
   recepcion: 'Recepción', cocina: 'Cocina', lavanderia: 'Lavandería', general: 'Tarea',
 };
 
-async function createTask({ room, area, type, title, description, priority, assignee_id, incident_id, createdBy }) {
-  const { id: taskId } = await one(
-    `INSERT INTO tasks (room_id, area, type, title, description, priority, assignee_id, incident_id, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+// scheduleId/scheduledSlot: solo los pone el generador de programaciones (ver
+// runTaskSchedules); el INSERT las ignora en la creación manual (quedan NULL).
+// dueAt.endOfLocalDay: plazo fijo (fin de ese día en la zona del hotel) en vez del
+// SLA por prioridad — lo usa una programación 'una_vez' con date_to.
+async function createTask({
+  room, area, type, title, description, priority, assignee_id, incident_id, createdBy,
+  scheduleId = null, scheduledSlot = null, dueAt = null,
+}) {
+  let dueAtValue = null;
+  if (dueAt?.endOfLocalDay) {
+    const row = await one(
+      `SELECT (($1::date + 1)::timestamp AT TIME ZONE $2) AS due_at`,
+      [dueAt.endOfLocalDay, HOTEL_TZ]
+    );
+    dueAtValue = row.due_at;
+  }
+
+  // ON CONFLICT protege el slot de una programación: si dos pasadas del generador
+  // solapan (arranque + intervalo, o dos réplicas), la segunda no inserta nada.
+  const inserted = await one(
+    `INSERT INTO tasks (room_id, area, type, title, description, priority, assignee_id, incident_id, created_by, due_at, schedule_id, scheduled_slot)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, now() + ($11 || ' hours')::interval), $12, $13)
+     ON CONFLICT (schedule_id, scheduled_slot) WHERE schedule_id IS NOT NULL DO NOTHING
+     RETURNING id`,
     [
       room.id, area, type, title || `${TASK_TITLES[type]} · ${room.name}`, description, priority,
-      assignee_id, incident_id ?? null, createdBy,
+      assignee_id, incident_id ?? null, createdBy, dueAtValue, TASK_SLA_HOURS[priority],
+      scheduleId, scheduledSlot,
     ]
   );
+  if (!inserted) return null;
+  const taskId = inserted.id;
 
   // Copia la checklist plantilla del tipo de habitación, incluida la exigencia de evidencia.
   await exec(
@@ -316,36 +433,45 @@ async function createTask({ room, area, type, title, description, priority, assi
   return taskId;
 }
 
-// Acepta room_id (una habitación) o room_ids (asignación masiva a varias a la vez).
-app.post('/api/tasks', requireRank('lider'), h(async (req, res) => {
-  const {
-    room_id, room_ids, type, area, title, description = '',
-    priority = 'media', assignee_id = null,
-  } = req.body || {};
-  if (!TASK_TYPES.includes(type)) return res.status(400).json({ error: 'Tipo de tarea no válido' });
+// Validaciones comunes a crear una tarea directa (POST /api/tasks) o una programación
+// (POST /api/task-schedules): tipo, prioridad, área supervisada, habitaciones válidas
+// y asignado dentro del área.
+async function validateTaskPayload(user, body) {
+  const { room_id, room_ids, type, area, priority = 'media', assignee_id = null } = body || {};
+  if (!TASK_TYPES.includes(type)) return { error: 'Tipo de tarea no válido', code: 400 };
+  if (!VALID_PRIORITIES.includes(priority)) return { error: 'Prioridad no válida', code: 400 };
 
   const taskArea = area && AREAS.includes(area) ? area : AREA_OF_TYPE[type];
-  if (!canSupervise(req.user, taskArea)) return deny(res, 'No puedes crear trabajo en esa área');
+  if (!canSupervise(user, taskArea)) return { error: 'No puedes crear trabajo en esa área', code: 403 };
 
   const ids = Array.isArray(room_ids) && room_ids.length > 0 ? room_ids : [room_id];
   const rooms = await Promise.all(ids.map((id) => (toId(id) ? getRoom(toId(id)) : null)));
-  if (rooms.some((r) => !r)) return res.status(400).json({ error: 'Habitación no válida' });
+  if (rooms.length === 0 || rooms.some((r) => !r)) return { error: 'Habitación no válida', code: 400 };
 
-  // Asignar a alguien de otra área dejaría una tarea que su destinatario no puede ni abrir.
+  let assigneeId = null;
   if (assignee_id) {
     const assignee = await one('SELECT * FROM users WHERE id = $1 AND active', [toId(assignee_id)]);
-    if (!assignee) return res.status(400).json({ error: 'Persona asignada no válida' });
+    if (!assignee) return { error: 'Persona asignada no válida', code: 400 };
     if (!inArea(assignee, taskArea)) {
-      return res.status(400).json({ error: `${assignee.name} no pertenece al área de ${taskArea}` });
+      return { error: `${assignee.name} no pertenece al área de ${taskArea}`, code: 400 };
     }
+    assigneeId = assignee.id;
   }
+  return { taskArea, rooms, assigneeId, priority };
+}
+
+// Acepta room_id (una habitación) o room_ids (asignación masiva a varias a la vez).
+app.post('/api/tasks', requireRank('lider'), h(async (req, res) => {
+  const { type, title, description = '' } = req.body || {};
+  const v = await validateTaskPayload(req.user, req.body || {});
+  if (v.error) return res.status(v.code).json({ error: v.error });
 
   const taskIds = [];
-  for (const room of rooms) {
+  for (const room of v.rooms) {
     taskIds.push(
       await createTask({
-        room, area: taskArea, type, title, description, priority,
-        assignee_id: assignee_id ? toId(assignee_id) : null, createdBy: req.user.id,
+        room, area: v.taskArea, type, title, description, priority: v.priority,
+        assignee_id: v.assigneeId, createdBy: req.user.id,
       })
     );
   }
@@ -353,18 +479,136 @@ app.post('/api/tasks', requireRank('lider'), h(async (req, res) => {
   res.status(201).json(await Promise.all(taskIds.map(getTaskFull)));
 }));
 
+function getScheduleFull(id) {
+  return one(
+    `SELECT s.*, r.name AS room_name, r.floor AS room_floor,
+            u.name AS assignee_name, c.name AS created_by_name
+     FROM task_schedules s
+     JOIN rooms r ON r.id = s.room_id
+     LEFT JOIN users u ON u.id = s.assignee_id
+     JOIN users c ON c.id = s.created_by
+     WHERE s.id = $1`,
+    [id]
+  );
+}
+
+const SCHEDULE_FREQS = ['una_vez', 'diaria', 'semanal', 'mensual'];
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Crea una programación (recurrente o de una sola vez); no genera ninguna tarea al
+// momento — eso lo hace runTaskSchedules cuando llega la hora local del hotel.
+app.post('/api/task-schedules', requireRank('lider'), h(async (req, res) => {
+  const { type, title = '', description = '', freq, run_hours, date_from, date_to } = req.body || {};
+  if (!SCHEDULE_FREQS.includes(freq)) return res.status(400).json({ error: 'Frecuencia no válida' });
+
+  const hours = Array.isArray(run_hours) && run_hours.length > 0 ? run_hours : [8];
+  const uniqueHours = [...new Set(hours.map((n) => Number(n)))];
+  if (uniqueHours.some((n) => !Number.isInteger(n) || n < 0 || n > 23)) {
+    return res.status(400).json({ error: 'Hora no válida (0-23)' });
+  }
+
+  let dateFrom = null;
+  if (date_from) {
+    if (!DATE_RE.test(date_from)) return res.status(400).json({ error: 'Fecha de inicio no válida (AAAA-MM-DD)' });
+    dateFrom = date_from;
+  }
+  let dateTo = null;
+  if (date_to) {
+    if (!DATE_RE.test(date_to)) return res.status(400).json({ error: 'Fecha de fin no válida (AAAA-MM-DD)' });
+    dateTo = date_to;
+  }
+  if (freq === 'una_vez' && !dateFrom) {
+    return res.status(400).json({ error: 'La programación de una sola vez necesita una fecha' });
+  }
+  if (dateFrom && dateTo && dateTo < dateFrom) {
+    return res.status(400).json({ error: 'La fecha de fin no puede ser anterior a la de inicio' });
+  }
+
+  const v = await validateTaskPayload(req.user, req.body || {});
+  if (v.error) return res.status(v.code).json({ error: v.error });
+
+  const ids = [];
+  for (const room of v.rooms) {
+    const row = await one(
+      `INSERT INTO task_schedules
+         (room_id, area, type, title, description, priority, assignee_id, freq, run_hours, date_from, date_to, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, (now() AT TIME ZONE $13)::date), $11, $12)
+       RETURNING id`,
+      [
+        room.id, v.taskArea, type, title, description, v.priority, v.assigneeId,
+        freq, uniqueHours, dateFrom, dateTo, req.user.id, HOTEL_TZ,
+      ]
+    );
+    ids.push(row.id);
+  }
+  const rows = await Promise.all(ids.map(getScheduleFull));
+  res.status(201).json(rows.length === 1 ? rows[0] : rows);
+}));
+
+// El líder ve solo las programaciones de su área; jefe y admin, todas.
+app.get('/api/task-schedules', requireRank('lider'), h(async (req, res) => {
+  const clauses = [];
+  const params = [];
+  if (!seesAllAreas(req.user)) {
+    clauses.push(`s.area = $${params.push(req.user.area)}`);
+  } else if (req.query.area && AREAS.includes(req.query.area)) {
+    clauses.push(`s.area = $${params.push(req.query.area)}`);
+  }
+  if (req.query.all !== '1') clauses.push('s.active');
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = await all(
+    `SELECT s.*, r.name AS room_name, r.floor AS room_floor,
+            u.name AS assignee_name, c.name AS created_by_name
+     FROM task_schedules s
+     JOIN rooms r ON r.id = s.room_id
+     LEFT JOIN users u ON u.id = s.assignee_id
+     JOIN users c ON c.id = s.created_by
+     ${where}
+     ORDER BY s.active DESC, s.created_at DESC`,
+    params
+  );
+  res.json(rows);
+}));
+
+// Cancelación blanda: preserva el FK de las instancias ya generadas y el historial.
+app.delete('/api/task-schedules/:id', requireRank('lider'), h(async (req, res) => {
+  const id = toId(req.params.id);
+  const schedule = id && (await one('SELECT * FROM task_schedules WHERE id = $1', [id]));
+  if (!schedule) return res.status(404).json({ error: 'Programación no encontrada' });
+  if (!canSupervise(req.user, schedule.area)) return deny(res, 'No puedes cancelar programaciones de esa área');
+  await exec('UPDATE task_schedules SET active = false WHERE id = $1', [schedule.id]);
+  res.json({ ok: true });
+}));
+
 // Transiciones permitidas de estado de tarea. `rechazada` es la devolución del
 // supervisor: la tarea vuelve a manos de quien la hizo, con el motivo escrito.
+// `vencida` la pone sola el barrido automático (sweepExpiredTasks), nunca un
+// PATCH manual; desde ahí se puede retomar igual que desde una devolución.
+// `impugnada` es la devolución de una tarea que YA estaba 'verificada': el jefe
+// (o quien la revisó) detecta después que no se cumplió lo exigido.
 const TASK_FLOW = {
   pendiente: ['en_curso', 'cancelada'],
   en_curso: ['hecha', 'pendiente', 'cancelada'],
   hecha: ['verificada', 'rechazada', 'en_curso'],
   rechazada: ['en_curso', 'cancelada'],
-  verificada: [],
+  vencida: ['en_curso', 'cancelada'],
+  verificada: ['impugnada'],
+  impugnada: ['en_curso', 'cancelada'],
   cancelada: [],
 };
 
-const REVIEW_STATUSES = ['verificada', 'rechazada'];
+// Tarea todavía sin cerrar del lado de quien la ejecuta: cuenta como trabajo pendiente
+// en tablones, contadores de habitación y resúmenes.
+const OPEN_TASK_STATUSES = ['pendiente', 'en_curso', 'rechazada', 'vencida', 'impugnada'];
+
+// Transiciones que exigen a alguien con permiso de revisión (no el propio ejecutor).
+const REVIEW_STATUSES = ['verificada', 'rechazada', 'impugnada'];
+// De esas, cuáles exigen escribir el motivo (una aprobación no necesita justificarse).
+const NOTE_REQUIRED_STATUSES = ['rechazada', 'impugnada'];
+// Tareas abiertas que el barrido de plazo puede tocar (aún no entregadas).
+const EXPIRABLE_STATUSES = ['pendiente', 'en_curso', 'rechazada'];
+// Al reanudar desde uno de estos estados se concede un plazo nuevo, igual que al crear.
+const RESETS_DUE_ON_RESUME = ['rechazada', 'vencida', 'impugnada'];
 
 app.patch('/api/tasks/:id', h(async (req, res) => {
   const id = toId(req.params.id);
@@ -399,8 +643,10 @@ app.patch('/api/tasks/:id', h(async (req, res) => {
           ? 'No puedes revisar tu propio trabajo'
           : 'Solo el líder del área puede revisar');
       }
-      if (status === 'rechazada' && !review_note?.trim()) {
-        return res.status(400).json({ error: 'Un rechazo necesita un motivo' });
+      if (NOTE_REQUIRED_STATUSES.includes(status) && !review_note?.trim()) {
+        return res.status(400).json({
+          error: status === 'rechazada' ? 'Un rechazo necesita un motivo' : 'Impugnar una verificación necesita un motivo',
+        });
       }
     } else if (status === 'cancelada') {
       if (!canSupervise(req.user, task.area)) return deny(res, 'Solo el líder del área puede cancelar');
@@ -424,21 +670,32 @@ app.patch('/api/tasks/:id', h(async (req, res) => {
     }
 
     const stamp = {
-      en_curso: 'started_at', hecha: 'done_at', verificada: 'verified_at', rechazada: 'rejected_at',
+      en_curso: 'started_at', hecha: 'done_at', verificada: 'verified_at',
+      rechazada: 'rejected_at', impugnada: 'disputed_at',
     }[status];
     await exec(
       `UPDATE tasks SET status = $1${stamp ? `, ${stamp} = now()` : ''} WHERE id = $2`,
       [status, task.id]
     );
 
+    // Reanudar tras una devolución (por rechazo, impugnación o vencimiento) es
+    // arrancar de cero: se concede el mismo plazo que tendría una tarea nueva.
+    if (RESETS_DUE_ON_RESUME.includes(task.status) && status === 'en_curso') {
+      await exec(
+        `UPDATE tasks SET due_at = now() + ($1 || ' hours')::interval WHERE id = $2`,
+        [TASK_SLA_HOURS[task.priority], task.id]
+      );
+    }
+
     if (REVIEW_STATUSES.includes(status)) {
       await exec('UPDATE tasks SET reviewed_by = $1, review_note = $2 WHERE id = $3', [
         req.user.id, String(review_note ?? '').trim(), task.id,
       ]);
       if (task.assignee_id && task.assignee_id !== req.user.id) {
+        const titles = { verificada: 'Trabajo verificado', rechazada: 'Trabajo devuelto', impugnada: 'Verificación impugnada' };
         sendPush(
           [task.assignee_id],
-          status === 'verificada' ? 'Trabajo verificado' : 'Trabajo devuelto',
+          titles[status],
           status === 'verificada'
             ? `${task.room_name}: aprobado por ${req.user.name}`
             : `${task.room_name}: ${String(review_note).trim()}`,
@@ -459,11 +716,12 @@ app.patch('/api/tasks/:id', h(async (req, res) => {
         if (status === 'en_curso') await setRoomStatus(room.id, 'en_limpieza');
         if (status === 'hecha') await setRoomStatus(room.id, 'pendiente_inspeccion');
         if (status === 'verificada') await setRoomStatus(room.id, 'lista');
-        // Rechazada: la habitación no está lista, vuelve a estar en manos de limpieza.
-        if (status === 'rechazada') await setRoomStatus(room.id, 'en_limpieza');
+        // Rechazada o impugnada: la habitación no está lista de verdad, vuelve a limpieza.
+        if (status === 'rechazada' || status === 'impugnada') await setRoomStatus(room.id, 'en_limpieza');
       }
-      if (task.type === 'inspeccion' && ['hecha', 'verificada'].includes(status)) {
-        await setRoomStatus(room.id, 'lista');
+      if (task.type === 'inspeccion') {
+        if (['hecha', 'verificada'].includes(status)) await setRoomStatus(room.id, 'lista');
+        if (status === 'impugnada') await setRoomStatus(room.id, 'pendiente_inspeccion');
       }
     }
 
@@ -488,7 +746,11 @@ app.patch('/api/task-items/:id', h(async (req, res) => {
   const done = !!req.body?.done;
   // El corazón del sistema de evidencias: sin foto/vídeo, el punto no se marca.
   if (done && item.requires_evidence) {
-    const { n } = await one('SELECT COUNT(*)::int AS n FROM evidence WHERE task_item_id = $1', [item.id]);
+    const { n } = await one(
+      `SELECT COUNT(*)::int AS n FROM evidence
+       WHERE task_item_id = $1 AND ($2 = 'cualquiera' OR kind = $2)`,
+      [item.id, item.evidence_kind]
+    );
     if (n < item.min_evidence) {
       const kind = { foto: 'foto', video: 'vídeo', cualquiera: 'foto o vídeo' }[item.evidence_kind];
       return res.status(400).json({
@@ -567,6 +829,9 @@ app.post('/api/evidence', h(async (req, res) => {
 
   const target = await resolveEvidenceTarget(req.user, req.body || {});
   if (target.error) return res.status(target.code).json({ error: target.error });
+  if (!storage.pathMatchesTarget(storage_path.trim(), target)) {
+    return res.status(400).json({ error: 'storage_path no corresponde al destino' });
+  }
 
   const row = await one(
     `INSERT INTO evidence (task_id, task_item_id, incident_id, kind, storage_path, mime, size_bytes, duration_ms, uploaded_by)
@@ -763,8 +1028,8 @@ app.patch('/api/incidents/:id', h(async (req, res) => {
     // Cierra la orden de trabajo vinculada si sigue abierta.
     await exec(
       `UPDATE tasks SET status = 'hecha', done_at = now()
-       WHERE incident_id = $1 AND status IN ('pendiente','en_curso','rechazada')`,
-      [inc.id]
+       WHERE incident_id = $1 AND status = ANY($2)`,
+      [inc.id, OPEN_TASK_STATUSES]
     );
   } else {
     await exec('UPDATE incidents SET status = $1 WHERE id = $2', [status, inc.id]);
@@ -881,12 +1146,38 @@ app.post('/api/inventory/:id/movements', h(async (req, res) => {
 
 // --- Mensajería interna (por tarea o incidencia) --------------------------------
 
+// Misma regla que adjuntar evidencia (resolveEvidenceTarget) para que nadie lea ni
+// escriba el hilo de un área ajena; el reportador de una incidencia participa de su
+// propio hilo aunque la incidencia se haya derivado a otra área.
+async function canAccessThread(user, taskId, incidentId) {
+  if (taskId) {
+    const task = await one('SELECT area FROM tasks WHERE id = $1', [taskId]);
+    if (!task) return { error: 'Tarea no encontrada', code: 404 };
+    if (!inArea(user, task.area)) return { error: 'Esta tarea es de otra área', code: 403 };
+    return {};
+  }
+  const inc = await one('SELECT area, reported_by FROM incidents WHERE id = $1', [incidentId]);
+  if (!inc) return { error: 'Incidencia no encontrada', code: 404 };
+  if (!inArea(user, inc.area) && !isAtLeast(user, 'lider') && inc.reported_by !== user.id) {
+    return { error: 'Esta incidencia es de otra área', code: 403 };
+  }
+  return {};
+}
+
 app.get('/api/messages', h(async (req, res) => {
   const { task_id, incident_id } = req.query;
   if (!task_id && !incident_id) return res.status(400).json({ error: 'Falta task_id o incident_id' });
+  const taskId = task_id ? toId(task_id) : null;
+  const incidentId = incident_id ? toId(incident_id) : null;
+  if (task_id && !taskId) return res.status(400).json({ error: 'Tarea no válida' });
+  if (incident_id && !incidentId) return res.status(400).json({ error: 'Incidencia no válida' });
+
+  const access = await canAccessThread(req.user, taskId, incidentId);
+  if (access.error) return res.status(access.code).json({ error: access.error });
+
   const params = [];
-  const taskCond = task_id ? `m.task_id = $${params.push(toId(task_id))}` : 'm.task_id IS NULL';
-  const incCond = incident_id ? `m.incident_id = $${params.push(toId(incident_id))}` : 'm.incident_id IS NULL';
+  const taskCond = taskId ? `m.task_id = $${params.push(taskId)}` : 'm.task_id IS NULL';
+  const incCond = incidentId ? `m.incident_id = $${params.push(incidentId)}` : 'm.incident_id IS NULL';
   const rows = await all(
     `SELECT m.*, u.name AS sender_name FROM messages m JOIN users u ON u.id = m.sender_id
      WHERE ${taskCond} AND ${incCond}
@@ -903,12 +1194,12 @@ app.post('/api/messages', h(async (req, res) => {
 
   const taskId = task_id ? toId(task_id) : null;
   const incidentId = incident_id ? toId(incident_id) : null;
-  if (task_id && !(taskId && (await one('SELECT id FROM tasks WHERE id = $1', [taskId])))) {
-    return res.status(400).json({ error: 'Tarea no válida' });
-  }
-  if (incident_id && !(incidentId && (await one('SELECT id FROM incidents WHERE id = $1', [incidentId])))) {
-    return res.status(400).json({ error: 'Incidencia no válida' });
-  }
+  if (task_id && !taskId) return res.status(400).json({ error: 'Tarea no válida' });
+  if (incident_id && !incidentId) return res.status(400).json({ error: 'Incidencia no válida' });
+
+  const access = await canAccessThread(req.user, taskId, incidentId);
+  if (access.error) return res.status(access.code).json({ error: access.error });
+
   const { id } = await one(
     'INSERT INTO messages (task_id, incident_id, sender_id, text) VALUES ($1, $2, $3, $4) RETURNING id',
     [taskId, incidentId, req.user.id, text.trim()]
@@ -981,6 +1272,7 @@ app.get('/api/reports/export', requireRank('jefe'), h(async (req, res) => {
 // Cada uno ve el resumen de su alcance: el empleado y el líder, el de su área.
 
 app.get('/api/summary', h(async (req, res) => {
+  await sweepExpiredTasks();
   const scoped = !seesAllAreas(req.user);
   const areaFilter = scoped ? 'AND area = $1' : '';
   const params = scoped ? [req.user.area] : [];
@@ -990,10 +1282,12 @@ app.get('/api/summary', h(async (req, res) => {
     roomsByStatus[row.status] = row.n;
   }
   const openTasks = {};
+  // areaFilter (si aplica) reclama $1; el array de estados va detrás.
+  const statusIdx = scoped ? 2 : 1;
   for (const row of await all(
     `SELECT type, COUNT(*)::int AS n FROM tasks
-     WHERE status IN ('pendiente','en_curso','rechazada') ${areaFilter} GROUP BY type`,
-    params
+     WHERE status = ANY($${statusIdx}) ${areaFilter} GROUP BY type`,
+    scoped ? [...params, OPEN_TASK_STATUSES] : [OPEN_TASK_STATUSES]
   )) {
     openTasks[row.type] = row.n;
   }
@@ -1023,4 +1317,12 @@ app.listen(PORT, () => {
   if (storage.DRIVER === 'local') {
     console.log('  ⚠ driver local (desarrollo): los ficheros van a server/uploads y son públicos.');
   }
+  // Vencimiento automático de tareas y generación de tareas programadas: al
+  // arrancar y luego cada 5 min, sin depender de que alguien tenga la app abierta.
+  sweepExpiredTasks().catch((err) => console.error('Error en el barrido de vencimiento:', err));
+  runTaskSchedules().catch((err) => console.error('Error generando tareas programadas:', err));
+  setInterval(() => {
+    sweepExpiredTasks().catch((err) => console.error('Error en el barrido de vencimiento:', err));
+    runTaskSchedules().catch((err) => console.error('Error generando tareas programadas:', err));
+  }, 5 * 60 * 1000);
 });

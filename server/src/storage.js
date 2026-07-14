@@ -51,6 +51,17 @@ export function buildPath({ taskId, taskItemId, incidentId, mime }) {
   return `${scope}/${randomUUID()}.${ext}`;
 }
 
+// Inverso de buildPath: comprueba que una ruta ya subida corresponde de verdad al
+// target que se está registrando, para que un usuario autenticado no pueda anotar
+// bajo su tarea el fichero que subió otro (el UNIQUE de storage_path solo evita
+// duplicar el mismo registro, no ata el path a su destino).
+export function pathMatchesTarget(p, { taskId, taskItemId, incidentId }) {
+  const prefix = taskId
+    ? `task/${taskId}/${taskItemId ? `item-${taskItemId}` : 'general'}/`
+    : `incident/${incidentId}/`;
+  return typeof p === 'string' && p.startsWith(prefix) && /^[0-9a-f-]{36}\.[a-z0-9]{2,5}$/i.test(p.slice(prefix.length));
+}
+
 // --- Driver local -------------------------------------------------------------
 // La firma impide que un cliente autenticado escriba en una ruta arbitraria del disco.
 

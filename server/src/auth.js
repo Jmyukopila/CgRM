@@ -18,7 +18,7 @@ export async function login(username, password) {
 }
 
 export function publicUser(u) {
-  return { id: u.id, username: u.username, name: u.name, role: u.role, area: u.area ?? null };
+  return { id: u.id, username: u.username, name: u.name, role: u.role, area: u.area ?? null, active: u.active };
 }
 
 export function requireAuth(req, res, next) {
