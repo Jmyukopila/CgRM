@@ -21,11 +21,6 @@ app.use(cors());
 // de incidencias y objetos perdidos, que son anteriores a ese mecanismo.
 app.use(express.json({ limit: '8mb' }));
 
-// Sonda de salud sin autenticar: la usa el keepalive de GitHub Actions para
-// mantener despierto el servicio de Render durante el horario operativo y evitar
-// el cold-start de ~30-50s en el primer login del turno.
-app.get('/healthz', (_req, res) => res.json({ ok: true }));
-
 const PORT = process.env.PORT || 4000;
 
 // --- Helpers ----------------------------------------------------------------

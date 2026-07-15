@@ -68,7 +68,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export function warmUp() {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  fetch(`${API_URL}/healthz`, { signal: controller.signal })
+  fetch(`${API_URL}/health`, { signal: controller.signal })
     .catch(() => {})
     .finally(() => clearTimeout(t));
 }
