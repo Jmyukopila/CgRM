@@ -2,7 +2,9 @@ import { Roboto_500Medium, Roboto_600SemiBold, Roboto_700Bold } from '@expo-goog
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, View } from 'react-native';
+import { useEffect } from 'react';
+import { ActivityIndicator, AppState, View } from 'react-native';
+import { warmUp } from '../lib/api';
 import { AuthProvider, useAuth } from '../lib/auth';
 import { LanguageProvider } from '../lib/i18n';
 import { usePushNavigation } from '../lib/push';
@@ -21,6 +23,17 @@ function Gate() {
     Roboto_700Bold,
   });
   usePushNavigation();
+
+  // Warm-up del backend: al abrir y cada vez que la app vuelve a primer plano
+  // (que es cuando Render pudo haberse dormido), para que el server ya esté
+  // despierto al enviar la primera petición.
+  useEffect(() => {
+    warmUp();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') warmUp();
+    });
+    return () => sub.remove();
+  }, []);
 
   if (loading || !fontsLoaded) {
     return (

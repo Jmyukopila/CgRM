@@ -29,7 +29,11 @@ export class ApiError extends Error {
   }
 }
 
-const REQUEST_TIMEOUT_MS = 15000;
+// 60s (no 15s) como red de seguridad ante el cold-start de Render: si el keepalive
+// falla o es de madrugada, el servicio tarda ~30-50s en despertar. Un fallo real de
+// red rechaza al instante (no espera el timeout), así que este margen solo aplica
+// cuando el servidor está conectado pero lento en responder.
+const REQUEST_TIMEOUT_MS = 60000;
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const controller = new AbortController();
@@ -56,6 +60,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error ?? `Error ${res.status}`);
   return data as T;
+}
+
+// Despierta el backend de Render (plan free duerme tras ~15 min de inactividad) sin
+// bloquear ni lanzar: se llama al abrir la app y al volver de segundo plano, para que
+// el servidor esté listo cuando el usuario envíe el login y no se coma el cold-start.
+export function warmUp() {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  fetch(`${API_URL}/healthz`, { signal: controller.signal })
+    .catch(() => {})
+    .finally(() => clearTimeout(t));
 }
 
 export const api = {

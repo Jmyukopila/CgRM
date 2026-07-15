@@ -43,7 +43,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "apiUrl": "https://TU-SERVIDOR.com"
+      "apiUrl": "https://cgrm.onrender.com"
     }
   }
 }

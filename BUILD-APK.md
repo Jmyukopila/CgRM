@@ -71,4 +71,35 @@ cd app/android
 - ✅ DB: conexión por `DATABASE_URL` con SSL real (Neon), sin credenciales en código.
 - ✅ JWT: secreto por entorno, arranque abortado en producción si falta.
 - ✅ Sin secretos versionados (`server/.env` ignorado; `.env.example` es solo plantilla).
-- ⏳ Pendiente tuyo: poner `apiUrl` real y desplegar el servidor.
+- ✅ `apiUrl` = `https://cgrm.onrender.com` (verificado: responde, `/api/rooms` → 401 con auth activa).
+- ✅ Proyecto nativo regenerado (`prebuild --clean`) con la URL real embebida.
+
+## Cold-start de Render (resuelto)
+
+Render free **duerme el servicio tras ~15 min de inactividad** y tarda 30–50 s en despertar.
+Como el repo es **privado** (GitHub Actions ya no es gratis ilimitado), el cold-start se
+ataca sin infra que gaste minutos:
+
+1. **Warm-up desde la app** (`warmUp()` en `api.ts`, llamado en `_layout.tsx`): al abrir la
+   app y cada vez que vuelve a primer plano, dispara un ping fire-and-forget a `GET /healthz`.
+   Así el server empieza a despertar mientras el usuario teclea sus credenciales, y el login
+   ya no arranca en frío. Automático, cero infra.
+2. **Timeout de red a 60 s** (`REQUEST_TIMEOUT_MS` en `api.ts`): red de seguridad para que
+   ninguna petición falle aunque el server tarde en despertar. Un fallo real de red rechaza
+   al instante, así que este margen no penaliza el caso "sin internet".
+
+Requiere **desplegar el server** con el endpoint `/healthz` nuevo (Render redespliega solo
+al hacer push a la rama conectada — `master`).
+
+### Opción "siempre caliente" (opcional, 2 min de setup manual)
+
+Si quieres eliminar del todo la espera del primer login del turno, añade un pinger externo
+gratis (no gasta minutos de GitHub ni requiere código):
+
+- **cron-job.org** (gratis, resolución 1 min) o **UptimeRobot** (gratis, 5 min).
+- Crea una cuenta, añade un monitor/cron que haga `GET https://cgrm.onrender.com/healthz`.
+- Programa el ping cada **10 min** y, si el servicio lo permite, **solo en horario operativo**
+  (~5:00–00:00 Colombia) para no agotar las ~750 h/mes gratuitas de Render.
+
+Con esto el server está caliente siempre que el personal trabaja; el warm-up y el timeout
+quedan como respaldo.
