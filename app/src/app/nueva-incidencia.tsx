@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
+import { Image, type ImageStyle } from 'expo-image';
+import type * as ImagePicker from 'expo-image-picker';
 import { router, useNavigation } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-  Image,
-  ImageStyle,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   Switch,
@@ -14,8 +15,9 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import { Button, Chip, Screen, SectionTitle, notify } from '../components/ui';
-import { api, type Room } from '../lib/api';
+import { Button, Chip, ErrorState, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
+import { api, type Incident, type Room } from '../lib/api';
+import { pickAsset, uploadAsset } from '../lib/evidence';
 import { usePriorityMeta, useT } from '../lib/i18n';
 import { type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
@@ -27,31 +29,40 @@ export default function NuevaIncidencia() {
   const s = useThemedStyles(makeStyles);
   const priority = usePriorityMeta();
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [roomId, setRoomId] = useState<number | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [prio, setPrio] = useState('media');
   const [blocks, setBlocks] = useState(false);
-  const [photo, setPhoto] = useState<string | null>(null);
+  // Se guarda el asset elegido (no se sube todavía: la incidencia aún no existe).
+  const [photoAsset, setPhotoAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     navigation.setOptions({ title: t('newIncident.title') });
   }, [navigation, t]);
 
-  useEffect(() => {
-    api.get<Room[]>('/api/rooms').then(setRooms).catch(() => {});
-  }, []);
+  const loadRooms = () => {
+    api
+      .get<Room[]>('/api/rooms')
+      .then((r) => {
+        setRooms(r);
+        setLoadError(false);
+      })
+      .catch(() => setLoadError(true))
+      .finally(() => setLoaded(true));
+  };
+
+  useEffect(loadRooms, []);
 
   const pickPhoto = async (fromCamera: boolean) => {
-    const fn = fromCamera ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
-    if (fromCamera) {
-      const perm = await ImagePicker.requestCameraPermissionsAsync();
-      if (!perm.granted) return;
-    }
-    const result = await fn({ mediaTypes: ['images'], quality: 0.4, base64: true });
-    if (!result.canceled && result.assets[0]?.base64) {
-      setPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    try {
+      const asset = await pickAsset('foto', fromCamera ? 'camara' : 'galeria');
+      if (asset) setPhotoAsset(asset);
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
     }
   };
 
@@ -62,14 +73,22 @@ export default function NuevaIncidencia() {
     }
     setBusy(true);
     try {
-      await api.post('/api/incidents', {
+      const incident = await api.post<Incident>('/api/incidents', {
         room_id: roomId,
         title: title.trim(),
         description,
         priority: prio,
         blocks_room: blocks,
-        photo,
       });
+      // La foto se sube al flujo firmado de evidencias, ya con la incidencia creada;
+      // un fallo aquí no debe perder la incidencia ya registrada.
+      if (photoAsset) {
+        try {
+          await uploadAsset('foto', photoAsset, { incident_id: incident.id });
+        } catch (e: any) {
+          notify(t('common.error'), e.message);
+        }
+      }
       if (router.canGoBack()) router.back();
       else router.replace('/(tabs)/incidencias');
     } catch (e: any) {
@@ -79,9 +98,35 @@ export default function NuevaIncidencia() {
     }
   };
 
+  if (!loaded) {
+    return (
+      <Screen>
+        <View style={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="card" height={120} />
+          <Skeleton variant="card" height={80} />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={loadRooms} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
-      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        style={s.screen}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <SectionTitle>{t('newIncident.roomZone')}</SectionTitle>
         <View style={s.chips}>
           {rooms.map((r) => (
@@ -93,14 +138,14 @@ export default function NuevaIncidencia() {
         <TextInput
           style={s.input}
           placeholder={t('newIncident.whatPlaceholder')}
-          placeholderTextColor={colors.inkSoft}
+          placeholderTextColor={colors.inkFaint}
           value={title}
           onChangeText={setTitle}
         />
         <TextInput
           style={[s.input, { minHeight: 80, textAlignVertical: 'top', marginTop: 8 }]}
           placeholder={t('newIncident.detailsPlaceholder')}
-          placeholderTextColor={colors.inkSoft}
+          placeholderTextColor={colors.inkFaint}
           value={description}
           onChangeText={setDescription}
           multiline
@@ -122,15 +167,15 @@ export default function NuevaIncidencia() {
             value={blocks}
             onValueChange={setBlocks}
             trackColor={{ true: colors.danger, false: colors.hairline }}
-            thumbColor="#fff"
+            thumbColor={colors.onAccent}
           />
         </View>
 
         <SectionTitle>{t('newIncident.photo')}</SectionTitle>
-        {photo ? (
+        {photoAsset ? (
           <View>
-            <Image source={{ uri: photo }} style={s.photo} />
-            <Pressable onPress={() => setPhoto(null)} style={s.removePhoto}>
+            <Image source={{ uri: photoAsset.uri }} style={s.photo} contentFit="cover" />
+            <Pressable onPress={() => setPhotoAsset(null)} style={s.removePhoto}>
               <Ionicons name="close-circle" size={28} color={colors.danger} />
             </Pressable>
           </View>
@@ -149,6 +194,7 @@ export default function NuevaIncidencia() {
           <Button label={t('newIncident.submit')} onPress={submit} loading={busy} />
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

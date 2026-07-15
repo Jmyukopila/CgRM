@@ -25,8 +25,7 @@ const dict = {
 
     // Roles
     'role.empleado': 'Empleado',
-    'role.lider': 'Líder de área',
-    'role.jefe': 'Jefe de operaciones',
+    'role.jefe': 'Jefe / dueño',
     'role.admin': 'Administrador',
 
     // Áreas
@@ -43,6 +42,7 @@ const dict = {
     'roomStatus.en_limpieza': 'En limpieza',
     'roomStatus.pendiente_inspeccion': 'Inspección',
     'roomStatus.lista': 'Lista',
+    'roomStatus.ocupada': 'Ocupada',
     'roomStatus.bloqueada': 'Bloqueada',
 
     // Tipo de habitación
@@ -88,6 +88,7 @@ const dict = {
 
     // Pestañas
     'tabs.rooms': 'Habitaciones',
+    'tabs.dashboard': 'Panel',
     'tabs.tasks': 'Tareas',
     'tabs.myTasks': 'Mis tareas',
     'tabs.incidents': 'Incidencias',
@@ -100,6 +101,19 @@ const dict = {
     'login.password': 'Contraseña',
     'login.submit': 'Entrar',
     'login.error': 'No se pudo iniciar sesión',
+    'login.noAccount': '¿No tienes cuenta? Crear cuenta',
+
+    // Autorregistro (siempre crea un empleado)
+    'register.title': 'Crear cuenta',
+    'register.subtitle': 'Para el equipo · limpieza · mantenimiento',
+    'register.name': 'Nombre completo',
+    'register.username': 'Usuario',
+    'register.password': 'Contraseña',
+    'register.passwordHint': 'Mínimo 6 caracteres',
+    'register.area': 'Tu área de trabajo',
+    'register.submit': 'Crear cuenta',
+    'register.haveAccount': '¿Ya tienes cuenta? Entrar',
+    'register.error': 'No se pudo crear la cuenta',
 
     // Panel de habitaciones
     'rooms.empty': 'No hay habitaciones en este estado.',
@@ -116,6 +130,17 @@ const dict = {
     'room.taskName': 'Nombre de la tarea',
     'room.taskNamePlaceholder': 'Ej.: repasar cristales (opcional)',
     'room.taskDescriptionPlaceholder': 'Descripción (opcional)',
+    'room.checklistTitle': 'Checklist de este sitio',
+    'room.checklistHint':
+      'Lo que se copia a cada tarea nueva de este tipo aquí. Cambiarla no toca las tareas ya repartidas.',
+    'room.checklistEmpty': 'Sin puntos para este tipo de trabajo.',
+    'room.checklistEdit': 'Editar',
+    'room.checklistSaved': 'Checklist guardada',
+    'room.checklistCopy': 'Copiar a...',
+    'room.checklistCopyTitle': 'Copiar checklist a otras habitaciones',
+    'room.checklistCopySubmit': 'Copiar a {n} habitaciones',
+    'room.checklistCopied': 'Checklist copiada',
+    'room.taskChecklist': 'Checklist',
     'room.schedule': 'Programación',
     'room.scheduleOnce': 'Única',
     'room.scheduleRecurrent': 'Recurrente',
@@ -126,6 +151,49 @@ const dict = {
     'room.dateInvalid': 'Fecha no válida (formato AAAA-MM-DD)',
     'room.scheduleCreated': 'Programación creada',
 
+    // Acciones rápidas de estado (tablero de housekeeping)
+    'roomAction.title': 'Cambiar estado',
+    'roomAction.to': 'Pasar a {status}',
+    'roomAction.checkout': 'Registrar salida',
+    'roomAction.notAllowed': 'No puedes hacer ese cambio de estado',
+    'roomAction.openRoom': 'Ver ficha / estancia',
+
+    // Estancias
+    'stay.title': 'Estancia',
+    'stay.expectedCheckout': 'Salida prevista',
+    'stay.notes': 'Notas',
+    'stay.checkoutDone': 'Salida registrada',
+    'stay.checkoutConfirmTitle': 'Registrar salida',
+    'stay.checkoutConfirmBody': 'Se generará la limpieza de salida y la habitación pasará a sucia.',
+    'stay.noActive': 'Habitación libre',
+    'stay.history': 'Historial de estancias',
+    'stay.checkedInBy': 'Entrada por {name}',
+    'stay.checkedOutBy': 'Salida por {name}',
+
+    // Historial (auditoría)
+    'history.title': 'Historial',
+    'history.empty': 'Sin movimientos todavía.',
+    'history.action.created': 'Creada',
+    'history.action.status': '{from} → {to}',
+    'history.action.assignee': 'Reasignada: {from} → {to}',
+    'history.action.checkin': 'Entrada de {to}',
+    'history.action.checkout': 'Salida de {from}',
+    'history.bySystem': 'Sistema',
+
+    // Centro de notificaciones
+    'notif.title': 'Notificaciones',
+    'notif.empty': 'Sin notificaciones.',
+    'notif.markAllRead': 'Marcar todas como leídas',
+
+    // Días de la semana (recurrencia)
+    'weekday.0': 'D',
+    'weekday.1': 'L',
+    'weekday.2': 'M',
+    'weekday.3': 'X',
+    'weekday.4': 'J',
+    'weekday.5': 'V',
+    'weekday.6': 'S',
+
     // Tareas (lista)
     'tasks.empty': 'Sin tareas por ahora.',
     'tasks.showAll': 'Mostrando todas · tocar para ver solo abiertas',
@@ -133,6 +201,14 @@ const dict = {
     'tasks.breakdown': 'puntos',
     'tasks.incidentTag': '(avería)',
     'tasks.bulkNew': 'Asignación masiva',
+
+    // Editor de checklist
+    'checklist.addPoint': 'Añadir punto',
+    'checklist.pointPlaceholder': 'Qué hay que hacer o comprobar',
+    'checklist.noEvidence': 'Sin prueba',
+    'checklist.photo': 'Foto',
+    'checklist.video': 'Vídeo',
+    'checklist.anyEvidence': 'Foto o vídeo',
 
     // Detalle de tarea
     'task.checklist': 'Checklist',
@@ -145,6 +221,9 @@ const dict = {
     'task.assignedTo': 'Esta tarea está asignada a {name}.',
     'task.fromIncident': 'Generada por una incidencia — al completarla, la incidencia queda resuelta.',
     'task.elapsed': 'Tiempo en curso',
+    'task.doneByNamePlaceholder': 'Nombre de quien completó la tarea',
+    'task.doneByNameRequired': 'Escribe el nombre de quien completó la tarea',
+    'task.completedBy': 'Completado por {name}',
     'task.messagesTitle': 'Mensajes',
     'task.messagePlaceholder': 'Escribe un mensaje al equipo…',
     'task.noMessages': 'Sin mensajes todavía.',
@@ -226,6 +305,16 @@ const dict = {
     'profile.inventory': 'Inventario',
     'profile.users': 'Usuarios',
     'profile.reports': 'Reportes',
+    'profile.startShift': 'Iniciar turno',
+    'profile.startShiftConfirmTitle': '¿Iniciar turno?',
+    'profile.startShiftConfirmBody': 'Se guardará la hora de tu llegada.',
+    'profile.startShiftDone': 'Turno iniciado',
+    'profile.startShiftDoneBody': 'Entrada registrada a las {time}.',
+    'profile.endShift': 'Finalizar turno',
+    'profile.endShiftConfirmTitle': '¿Finalizar turno?',
+    'profile.endShiftConfirmBody': 'Se guardará la hora de salida y se avisará a tu líder.',
+    'profile.endShiftDone': 'Turno finalizado',
+    'profile.endShiftDoneBody': 'Salida registrada a las {time}.',
 
     // Apariencia
     'settings.appearance': 'Apariencia',
@@ -278,6 +367,20 @@ const dict = {
     'users.showActive': 'Mostrando activos · tocar para ver todos',
     'users.inactive': 'Desactivado',
 
+    // Panel de control
+    'dashboard.title': 'Panel de control',
+    'dashboard.subtitleTeam': 'Todas las áreas · hoy',
+    'dashboard.subtitleMine': 'Tu trabajo · hoy',
+    'dashboard.done': 'Terminado',
+    'dashboard.inProgress': 'En progreso',
+    'dashboard.notStarted': 'No iniciado',
+    'dashboard.roomsTitle': 'Habitaciones',
+    'dashboard.myTasksTitle': 'Tus tareas',
+    'dashboard.emptyRooms': 'No hay habitaciones que mostrar.',
+    'dashboard.emptyTasks': 'No tienes tareas asignadas ahora mismo.',
+    'dashboard.guest': 'Huésped',
+    'dashboard.free': 'Libre',
+
     // Reportes
     'reports.title': 'Reportes',
     'reports.tasksSummary': 'Tareas abiertas',
@@ -291,15 +394,27 @@ const dict = {
 
     // Asignación masiva
     'bulk.title': 'Asignación masiva',
-    'bulk.rooms': 'Habitaciones',
     'bulk.selectAll': 'Seleccionar todas',
     'bulk.deselectAll': 'Quitar selección',
-    'bulk.selectedCount': '{n} habitaciones seleccionadas',
+    'bulk.selectedCount': '{n} seleccionados',
     'bulk.submit': 'Crear {n} tareas',
     'bulk.missingTitle': 'Faltan datos',
-    'bulk.missingBody': 'Selecciona al menos una habitación.',
+    'bulk.missingBody': 'Selecciona al menos un sitio donde hacer la tarea.',
+    'bulk.missingName': 'Ponle un título a la tarea (ej.: «Limpieza general»).',
     'bulk.configure': 'Configurar tarea',
     'bulk.summary': 'Resumen',
+    'bulk.where': 'Dónde se hace',
+    'bulk.what': 'Qué hay que hacer',
+    'bulk.who': 'Quién lo hace',
+    'bulk.rooms': 'Habitaciones',
+    'bulk.zones': 'Zonas comunes',
+    'bulk.allRooms': 'Todas las habitaciones',
+    'bulk.allZones': 'Todas las zonas',
+    'bulk.clear': 'Ninguno',
+    'bulk.titlePlaceholder': 'Título: ej. «Limpieza general»',
+    'bulk.descPlaceholder': 'Detalles para el equipo (opcional)',
+    'bulk.checklist': 'Checklist',
+    'bulk.checklistHint': 'Se parte de la checklist del primer sitio seleccionado. Editarla aquí la deja como la checklist individual de cada sitio elegido.',
     'bulk.recurrent': 'Tarea recurrente',
     'bulk.oneTime': 'Una sola vez',
     'bulk.frequency': 'Frecuencia',
@@ -334,8 +449,7 @@ const dict = {
     'common.optional': 'optional',
 
     'role.empleado': 'Staff',
-    'role.lider': 'Area lead',
-    'role.jefe': 'Head of operations',
+    'role.jefe': 'Owner / manager',
     'role.admin': 'Administrator',
 
     'area.limpieza': 'Housekeeping',
@@ -350,6 +464,7 @@ const dict = {
     'roomStatus.en_limpieza': 'Cleaning',
     'roomStatus.pendiente_inspeccion': 'Inspection',
     'roomStatus.lista': 'Ready',
+    'roomStatus.ocupada': 'Occupied',
     'roomStatus.bloqueada': 'Blocked',
 
     'roomType.privada': 'Private',
@@ -388,6 +503,7 @@ const dict = {
     'lostStatus.entregado': 'Delivered',
 
     'tabs.rooms': 'Rooms',
+    'tabs.dashboard': 'Dashboard',
     'tabs.tasks': 'Tasks',
     'tabs.myTasks': 'My tasks',
     'tabs.incidents': 'Incidents',
@@ -399,6 +515,18 @@ const dict = {
     'login.password': 'Password',
     'login.submit': 'Sign in',
     'login.error': 'Could not sign in',
+    'login.noAccount': "Don't have an account? Sign up",
+
+    'register.title': 'Create account',
+    'register.subtitle': 'For the team · housekeeping · maintenance',
+    'register.name': 'Full name',
+    'register.username': 'Username',
+    'register.password': 'Password',
+    'register.passwordHint': 'At least 6 characters',
+    'register.area': 'Your work area',
+    'register.submit': 'Create account',
+    'register.haveAccount': 'Already have an account? Sign in',
+    'register.error': 'Could not create the account',
 
     'rooms.empty': 'No rooms in this state.',
 
@@ -413,6 +541,17 @@ const dict = {
     'room.taskName': 'Task name',
     'room.taskNamePlaceholder': 'E.g.: wipe down windows (optional)',
     'room.taskDescriptionPlaceholder': 'Description (optional)',
+    'room.checklistTitle': "This place's checklist",
+    'room.checklistHint':
+      'Copied into every new task of this type here. Editing it never touches tasks already handed out.',
+    'room.checklistEmpty': 'No points for this kind of work.',
+    'room.checklistEdit': 'Edit',
+    'room.checklistSaved': 'Checklist saved',
+    'room.checklistCopy': 'Copy to...',
+    'room.checklistCopyTitle': 'Copy checklist to other rooms',
+    'room.checklistCopySubmit': 'Copy to {n} rooms',
+    'room.checklistCopied': 'Checklist copied',
+    'room.taskChecklist': 'Checklist',
     'room.schedule': 'Schedule',
     'room.scheduleOnce': 'One-time',
     'room.scheduleRecurrent': 'Recurring',
@@ -422,6 +561,51 @@ const dict = {
     'room.datePlaceholder': 'YYYY-MM-DD',
     'room.dateInvalid': 'Invalid date (use YYYY-MM-DD)',
     'room.scheduleCreated': 'Schedule created',
+
+    'roomAction.title': 'Change status',
+    'roomAction.to': 'Move to {status}',
+    'roomAction.checkout': 'Check out',
+    'roomAction.notAllowed': "You can't make that status change",
+    'roomAction.openRoom': 'View room / stay',
+
+    'stay.title': 'Stay',
+    'stay.expectedCheckout': 'Expected checkout',
+    'stay.notes': 'Notes',
+    'stay.checkoutDone': 'Check-out recorded',
+    'stay.checkoutConfirmTitle': 'Check out',
+    'stay.checkoutConfirmBody': 'This will create the checkout cleaning task and set the room to dirty.',
+    'stay.noActive': 'Room is free',
+    'stay.history': 'Stay history',
+    'stay.checkedInBy': 'Checked in by {name}',
+    'stay.checkedOutBy': 'Checked out by {name}',
+
+    'history.title': 'History',
+    'history.empty': 'No activity yet.',
+    'history.action.created': 'Created',
+    'history.action.status': '{from} → {to}',
+    'history.action.assignee': 'Reassigned: {from} → {to}',
+    'history.action.checkin': 'Checked in {to}',
+    'history.action.checkout': 'Checked out {from}',
+    'history.bySystem': 'System',
+
+    'notif.title': 'Notifications',
+    'notif.empty': 'No notifications.',
+    'notif.markAllRead': 'Mark all as read',
+
+    'weekday.0': 'S',
+    'weekday.1': 'M',
+    'weekday.2': 'T',
+    'weekday.3': 'W',
+    'weekday.4': 'T',
+    'weekday.5': 'F',
+    'weekday.6': 'S',
+
+    'checklist.addPoint': 'Add point',
+    'checklist.pointPlaceholder': 'What must be done or checked',
+    'checklist.noEvidence': 'No proof',
+    'checklist.photo': 'Photo',
+    'checklist.video': 'Video',
+    'checklist.anyEvidence': 'Photo or video',
 
     'tasks.empty': 'No tasks right now.',
     'tasks.showAll': 'Showing all · tap to show open only',
@@ -440,6 +624,9 @@ const dict = {
     'task.assignedTo': 'This task is assigned to {name}.',
     'task.fromIncident': 'Generated from an incident — completing it resolves the incident too.',
     'task.elapsed': 'Time in progress',
+    'task.doneByNamePlaceholder': "Name of who completed the task",
+    'task.doneByNameRequired': 'Write the name of who completed the task',
+    'task.completedBy': 'Completed by {name}',
     'task.messagesTitle': 'Messages',
     'task.messagePlaceholder': 'Write a message to the team…',
     'task.noMessages': 'No messages yet.',
@@ -515,6 +702,16 @@ const dict = {
     'profile.inventory': 'Inventory',
     'profile.users': 'Users',
     'profile.reports': 'Reports',
+    'profile.startShift': 'Start shift',
+    'profile.startShiftConfirmTitle': 'Start your shift?',
+    'profile.startShiftConfirmBody': 'Your arrival time will be saved.',
+    'profile.startShiftDone': 'Shift started',
+    'profile.startShiftDoneBody': 'Check-in logged at {time}.',
+    'profile.endShift': 'End shift',
+    'profile.endShiftConfirmTitle': 'End your shift?',
+    'profile.endShiftConfirmBody': 'Your exit time will be saved and your lead will be notified.',
+    'profile.endShiftDone': 'Shift ended',
+    'profile.endShiftDoneBody': 'Exit logged at {time}.',
 
     // Appearance
     'settings.appearance': 'Appearance',
@@ -564,6 +761,20 @@ const dict = {
     'users.showActive': 'Showing active · tap to show all',
     'users.inactive': 'Deactivated',
 
+    // Dashboard
+    'dashboard.title': 'Control panel',
+    'dashboard.subtitleTeam': 'All areas · today',
+    'dashboard.subtitleMine': 'Your work · today',
+    'dashboard.done': 'Done',
+    'dashboard.inProgress': 'In progress',
+    'dashboard.notStarted': 'Not started',
+    'dashboard.roomsTitle': 'Rooms',
+    'dashboard.myTasksTitle': 'Your tasks',
+    'dashboard.emptyRooms': 'No rooms to show.',
+    'dashboard.emptyTasks': "You don't have any tasks assigned right now.",
+    'dashboard.guest': 'Guest',
+    'dashboard.free': 'Free',
+
     'reports.title': 'Reports',
     'reports.tasksSummary': 'Open tasks',
     'reports.roomsSummary': 'Rooms by status',
@@ -575,15 +786,27 @@ const dict = {
     'reports.exportedBody': 'The CSV file has been downloaded / shared.',
 
     'bulk.title': 'Bulk assign',
-    'bulk.rooms': 'Rooms',
     'bulk.selectAll': 'Select all',
     'bulk.deselectAll': 'Deselect all',
-    'bulk.selectedCount': '{n} rooms selected',
+    'bulk.selectedCount': '{n} selected',
     'bulk.submit': 'Create {n} tasks',
     'bulk.missingTitle': 'Missing information',
-    'bulk.missingBody': 'Select at least one room.',
+    'bulk.missingBody': 'Pick at least one place to do the task.',
+    'bulk.missingName': 'Give the task a title (e.g. “Deep clean”).',
     'bulk.configure': 'Configure task',
     'bulk.summary': 'Summary',
+    'bulk.where': 'Where',
+    'bulk.what': 'What to do',
+    'bulk.who': 'Who does it',
+    'bulk.rooms': 'Rooms',
+    'bulk.zones': 'Common areas',
+    'bulk.allRooms': 'All rooms',
+    'bulk.allZones': 'All areas',
+    'bulk.clear': 'None',
+    'bulk.titlePlaceholder': 'Title: e.g. “Deep clean”',
+    'bulk.descPlaceholder': 'Details for the team (optional)',
+    'bulk.checklist': 'Checklist',
+    'bulk.checklistHint': "Starts from the first selected place's checklist. Editing it here leaves it as the individual checklist of every place picked.",
     'bulk.recurrent': 'Recurring task',
     'bulk.oneTime': 'One-time',
     'bulk.frequency': 'Frequency',
@@ -708,9 +931,22 @@ export function useAreaLabels(): Record<string, string> {
 }
 
 export function useRoleLabels(): Record<string, string> {
-  return useLabels('role', ['empleado', 'lider', 'jefe', 'admin']);
+  return useLabels('role', ['empleado', 'jefe', 'admin']);
 }
 
 export function useRoomTypeLabels(): Record<string, string> {
   return useLabels('roomType', ['privada', 'suite', 'compartida', 'zona_comun']);
+}
+
+// "hace 5 min" / "hace 2 h" / "hace 3 d", reutilizado en historial, revisión y notificaciones.
+export function useRelativeTime() {
+  const { t } = useT();
+  return (iso: string | null) => {
+    if (!iso) return '';
+    const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (mins < 60) return t('time.minutesAgo', { n: mins });
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return t('time.hoursAgo', { n: hours });
+    return t('time.daysAgo', { n: Math.round(hours / 24) });
+  };
 }

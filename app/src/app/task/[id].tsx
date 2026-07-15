@@ -1,10 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  TextStyle,
+  View,
+  ViewStyle,
+} from 'react-native';
 import { EvidenceStrip } from '../../components/evidence';
+import { Timeline } from '../../components/timeline';
 import { Button, cardShadow, ErrorState, Pill, Screen, SectionTitle, Skeleton, notify } from '../../components/ui';
-import { api, type Evidence, type Message, type Task, type TaskItem } from '../../lib/api';
+import { api, type AuditEntry, type Evidence, type Message, type Task, type TaskItem } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { listEvidence } from '../../lib/evidence';
 import { useAreaLabels, usePriorityMeta, useT, useTaskStatusMeta, useTaskTypeLabels } from '../../lib/i18n';
@@ -190,22 +201,30 @@ export default function TaskDetail() {
   const areas = useAreaLabels();
   const [task, setTask] = useState<Task | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [history, setHistory] = useState<AuditEntry[]>([]);
   const [note, setNote] = useState('');
+  const [doneByName, setDoneByName] = useState('');
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [fresh, files] = await Promise.all([
+      const [fresh, files, entries] = await Promise.all([
         api.get<Task>(`/api/tasks/${id}`),
         listEvidence({ task_id: Number(id) }),
+        api.get<AuditEntry[]>(`/api/audit?entity=task&id=${id}`),
       ]);
       setTask(fresh);
       setEvidence(files);
+      setHistory(entries);
       setLoadError(false);
     } catch {
       setLoadError(true);
     }
+  }, [id]);
+
+  const loadHistory = useCallback(() => {
+    api.get<AuditEntry[]>(`/api/audit?entity=task&id=${id}`).then(setHistory).catch(() => {});
   }, [id]);
 
   useFocusEffect(
@@ -251,12 +270,21 @@ export default function TaskDetail() {
   const taskEvidence = evidence.filter((e) => e.task_item_id === null);
   const evidenceOf = (itemId: number) => evidence.filter((e) => e.task_item_id === itemId);
 
-  const changeStatus = async (status: string, reviewNote?: string) => {
+  const changeStatus = async (status: string, reviewNote?: string, doneBy?: string) => {
     setBusy(true);
     try {
-      setTask(await api.patch<Task>(`/api/tasks/${task.id}`, { status, review_note: reviewNote }));
+      // La respuesta del PATCH ya trae la tarea completa (con su checklist): no hace
+      // falta recargar todo, solo el historial que este cambio acaba de escribir.
+      setTask(
+        await api.patch<Task>(`/api/tasks/${task.id}`, {
+          status,
+          review_note: reviewNote,
+          done_by_name: doneBy,
+        })
+      );
       setNote('');
-      await load();
+      setDoneByName('');
+      loadHistory();
     } catch (e: any) {
       notify(t('common.error'), e.message);
     } finally {
@@ -274,6 +302,11 @@ export default function TaskDetail() {
     changeStatus('impugnada', note.trim());
   };
 
+  const markDone = () => {
+    if (!doneByName.trim()) return notify(t('common.error'), t('task.doneByNameRequired'));
+    changeStatus('hecha', undefined, doneByName.trim());
+  };
+
   const toggleItem = async (itemId: number, done: boolean) => {
     // Optimista: marca en local y sincroniza.
     setTask((prev) =>
@@ -289,7 +322,12 @@ export default function TaskDetail() {
 
   return (
     <Screen>
-      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        style={s.screen}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={s.header}>
           <View style={{ flex: 1 }}>
             <Text style={s.title}>{task.title}</Text>
@@ -301,6 +339,9 @@ export default function TaskDetail() {
         </View>
 
         <Text style={[s.priority, { color: pr.color }]}>● {pr.label}</Text>
+        {task.done_by_name ? (
+          <Text style={s.meta}>{t('task.completedBy', { name: task.done_by_name })}</Text>
+        ) : null}
         {task.description ? <Text style={s.desc}>{task.description}</Text> : null}
         {task.incident_id ? <Text style={s.incidentNote}>{t('task.fromIncident')}</Text> : null}
 
@@ -386,17 +427,28 @@ export default function TaskDetail() {
             <Button label={t('task.startWork')} onPress={() => changeStatus('en_curso')} loading={busy} />
           )}
           {task.status === 'en_curso' && canWork && (
-            <Button
-              label={
-                items.length > 0 && doneCount < items.length
-                  ? t('task.completeMissing', { n: items.length - doneCount })
-                  : t('task.markDone')
-              }
-              color={colors.success}
-              disabled={items.length > 0 && doneCount < items.length}
-              onPress={() => changeStatus('hecha')}
-              loading={busy}
-            />
+            <>
+              {items.length === 0 || doneCount === items.length ? (
+                <TextInput
+                  style={s.noteInput}
+                  placeholder={t('task.doneByNamePlaceholder')}
+                  placeholderTextColor={colors.inkFaint}
+                  value={doneByName}
+                  onChangeText={setDoneByName}
+                />
+              ) : null}
+              <Button
+                label={
+                  items.length > 0 && doneCount < items.length
+                    ? t('task.completeMissing', { n: items.length - doneCount })
+                    : t('task.markDone')
+                }
+                color={colors.success}
+                disabled={(items.length > 0 && doneCount < items.length) || !doneByName.trim()}
+                onPress={markDone}
+                loading={busy}
+              />
+            </>
           )}
 
           {/* Bandeja de revisión: verificar o devolver con motivo. */}
@@ -448,7 +500,10 @@ export default function TaskDetail() {
         </View>
 
         <MessageThread taskId={task.id} />
+
+        <Timeline entries={history} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

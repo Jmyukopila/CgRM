@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Text, TextStyle, View, ViewStyle } from 'react-native';
-import { AnimatedPressable, Avatar, Button, Card, Screen, SegmentedControl } from '../../components/ui';
-import { API_URL } from '../../lib/api';
+import { AnimatedPressable, Avatar, Button, Card, confirmAction, notify, Screen, SegmentedControl } from '../../components/ui';
+import { api, API_URL } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { useAreaLabels, useT, type Lang } from '../../lib/i18n';
 import { canManageOps, isAtLeast } from '../../lib/permissions';
@@ -13,7 +13,7 @@ import { type ThemePreference, useThemedStyles, useTheme } from '../../lib/theme
 const GENERAL_LINKS = [
   { href: '/objetos-perdidos', key: 'profile.lostItems' as const, icon: 'search-outline' as const },
 ];
-const LIDER_LINKS = [
+const SUPERVISOR_LINKS = [
   { href: '/programadas', key: 'schedules.title' as const, icon: 'repeat-outline' as const },
 ];
 const ADMIN_LINKS = [
@@ -29,10 +29,69 @@ export default function Perfil() {
   const areas = useAreaLabels();
   const s = useThemedStyles(makeStyles);
   const [busy, setBusy] = useState(false);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  // Ya fichó la entrada de hoy y aún no la salida: alterna qué botón se muestra.
+  const [clockedIn, setClockedIn] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      api
+        .get<{ lastKind: 'entrada' | 'salida' | null }>('/api/shift/today')
+        .then((r) => setClockedIn(r.lastKind === 'entrada'))
+        .catch(() => {});
+    }, [])
+  );
+
   if (!user) return null;
 
+  const formatTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString(lang === 'es' ? 'es-CO' : 'en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+  const startShift = async () => {
+    const ok = await confirmAction(
+      t('profile.startShiftConfirmTitle'),
+      t('profile.startShiftConfirmBody'),
+      t('profile.startShift'),
+      t('common.cancel')
+    );
+    if (!ok) return;
+    setShiftBusy(true);
+    try {
+      const log = await api.post<{ ended_at: string }>('/api/shift/start', {});
+      setClockedIn(true);
+      notify(t('profile.startShiftDone'), t('profile.startShiftDoneBody', { time: formatTime(log.ended_at) }));
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
+  const endShift = async () => {
+    const ok = await confirmAction(
+      t('profile.endShiftConfirmTitle'),
+      t('profile.endShiftConfirmBody'),
+      t('profile.endShift'),
+      t('common.cancel')
+    );
+    if (!ok) return;
+    setShiftBusy(true);
+    try {
+      const log = await api.post<{ ended_at: string }>('/api/shift/end', {});
+      setClockedIn(false);
+      notify(t('profile.endShiftDone'), t('profile.endShiftDoneBody', { time: formatTime(log.ended_at) }));
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
   return (
-    <Screen>
+    <Screen slideFrom="down">
       <View style={s.screen}>
         <Card style={s.identityCard}>
           <Avatar name={user.name} color={roleColor(colors, user.role)} size={56} />
@@ -84,9 +143,9 @@ export default function Perfil() {
           ))}
         </Card>
 
-        {isAtLeast(user, 'lider') && (
+        {isAtLeast(user, 'jefe') && (
           <Card style={{ padding: 4 }}>
-            {LIDER_LINKS.map((link) => (
+            {SUPERVISOR_LINKS.map((link) => (
               <AnimatedPressable key={link.href} onPress={() => router.push(link.href as any)} style={s.linkRow}>
                 <Ionicons name={link.icon} size={18} color={colors.inkSoft} />
                 <Text style={s.linkText}>{t(link.key)}</Text>
@@ -107,6 +166,24 @@ export default function Perfil() {
               </AnimatedPressable>
             ))}
           </Card>
+        )}
+
+        {clockedIn ? (
+          <Button
+            label={t('profile.endShift')}
+            kind="ghost"
+            icon="log-out-outline"
+            loading={shiftBusy}
+            onPress={endShift}
+          />
+        ) : (
+          <Button
+            label={t('profile.startShift')}
+            kind="ghost"
+            icon="log-in-outline"
+            loading={shiftBusy}
+            onPress={startShift}
+          />
         )}
 
         <Button

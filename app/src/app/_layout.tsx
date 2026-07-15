@@ -1,27 +1,26 @@
-import { Archivo_500Medium, Archivo_600SemiBold, Archivo_700Bold } from '@expo-google-fonts/archivo';
-import { Fraunces_600SemiBold, Fraunces_700Bold } from '@expo-google-fonts/fraunces';
+import { Roboto_500Medium, Roboto_600SemiBold, Roboto_700Bold } from '@expo-google-fonts/roboto';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, View } from 'react-native';
 import { AuthProvider, useAuth } from '../lib/auth';
 import { LanguageProvider } from '../lib/i18n';
+import { usePushNavigation } from '../lib/push';
 import { fonts } from '../lib/theme';
 import { ThemeProvider, useTheme } from '../lib/theme-context';
 
 // Ninguna pantalla monta hasta restaurar la sesión y cargar la tipografía de marca:
 // evita que un deep-link o un refresco en web dispare peticiones sin token, o que la
-// primera pantalla parpadee de la fuente de sistema a Fraunces/Archivo.
+// primera pantalla parpadee de la fuente de sistema a Roboto.
 function Gate() {
   const { loading } = useAuth();
   const { colors, resolved } = useTheme();
   const [fontsLoaded] = useFonts({
-    Fraunces_600SemiBold,
-    Fraunces_700Bold,
-    Archivo_500Medium,
-    Archivo_600SemiBold,
-    Archivo_700Bold,
+    Roboto_500Medium,
+    Roboto_600SemiBold,
+    Roboto_700Bold,
   });
+  usePushNavigation();
 
   if (loading || !fontsLoaded) {
     return (
@@ -43,6 +42,7 @@ function Gate() {
         }}
       >
         <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="registro" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="room/[id]" options={{ title: 'Habitación' }} />
         <Stack.Screen name="task/[id]" options={{ title: 'Tarea' }} />
@@ -57,6 +57,7 @@ function Gate() {
         <Stack.Screen name="inventario" options={{ title: 'Inventario' }} />
         <Stack.Screen name="usuarios" options={{ title: 'Usuarios' }} />
         <Stack.Screen name="reportes" options={{ title: 'Reportes' }} />
+        <Stack.Screen name="notificaciones" options={{ title: 'Notificaciones' }} />
       </Stack>
     </>
   );

@@ -1,7 +1,7 @@
 // Sesión persistente (token JWT + usuario) con AsyncStorage.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, setToken, type User } from './api';
+import { api, setToken, type Area, type User } from './api';
 import { registerPushToken } from './push';
 
 const STORAGE_KEY = 'cgrm.session';
@@ -10,6 +10,9 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  // Autorregistro: siempre crea un empleado (el servidor lo fuerza igual, esto solo
+  // evita mandar un rol que la API va a ignorar). Jefe/admin se dan de alta a mano.
+  register: (data: { username: string; password: string; name: string; area: Area }) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -51,6 +54,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     registerPushToken();
   };
 
+  const register = async (data: { username: string; password: string; name: string; area: Area }) => {
+    const res = await api.post<{ token: string; user: User }>('/api/auth/register', data);
+    setToken(res.token);
+    setUser(res.user);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(res));
+    registerPushToken();
+  };
+
   const logout = async () => {
     setToken(null);
     setUser(null);
@@ -58,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
       {children}
     </AuthContext.Provider>
   );

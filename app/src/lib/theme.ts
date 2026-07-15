@@ -81,15 +81,14 @@ export const darkColors = {
 
 export type Colors = typeof lightColors;
 
-// Pareja de marca: Fraunces (serif editorial, titulares — la voz "bitácora de
-// gobernanta boutique") + Archivo (grotesca de UI, datos y cuerpo). Las claves
+// Una sola familia (Roboto) para toda la app — solo varía el peso. Las claves
 // coinciden con el nombre que expone @expo-google-fonts al registrar con useFonts.
 export const fonts = {
-  displaySemibold: 'Fraunces_600SemiBold',
-  displayBold: 'Fraunces_700Bold',
-  uiMedium: 'Archivo_500Medium',
-  uiSemibold: 'Archivo_600SemiBold',
-  uiBold: 'Archivo_700Bold',
+  displaySemibold: 'Roboto_600SemiBold',
+  displayBold: 'Roboto_700Bold',
+  uiMedium: 'Roboto_500Medium',
+  uiSemibold: 'Roboto_600SemiBold',
+  uiBold: 'Roboto_700Bold',
 } as const;
 
 // Base 4: toda la separación del sistema es un múltiplo de esto.
@@ -100,11 +99,11 @@ export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32
 // chips/badges/avatares — nunca en una tarjeta o un botón grande.
 export const radius = { sm: 10, md: 14, lg: 20, pill: 999 } as const;
 
-// Escala tipográfica. `display`/`title`/`heading` llevan la serif de marca (Fraunces);
-// `body`/`caption`/`label` la grotesca (Archivo) — la mezcla es la jerarquía del sistema,
-// no un accidente. El tracking negativo en los tamaños grandes es lo que hace que un
-// display de 34-40px no se sienta suelto; el positivo en `label` es lo que hace que un
-// texto en mayúsculas a 11px siga siendo legible.
+// Escala tipográfica. Una sola familia (Roboto) en toda la escala — la jerarquía la
+// hace el peso (bold en display/title/heading, medium en body/caption) y el tamaño,
+// no un cambio de fuente. El tracking negativo en los tamaños grandes es lo que hace
+// que un display de 34-40px no se sienta suelto; el positivo en `label` es lo que hace
+// que un texto en mayúsculas a 11px siga siendo legible.
 export const typeScale = {
   display: { fontFamily: fonts.displaySemibold, fontSize: 34, lineHeight: 40, letterSpacing: -0.6 },
   title: { fontFamily: fonts.displaySemibold, fontSize: 26, lineHeight: 32, letterSpacing: -0.4 },
@@ -125,19 +124,29 @@ export const typeScale = {
 // Se recalcula por tema porque cada mapa referencia los tonos de `colors`.
 export function makeStatusMaps(colors: Colors) {
   const roomStatusColor: Record<string, { color: string; soft: string }> = {
-    sucia: { color: colors.warning, soft: colors.warningSoft },
-    en_limpieza: { color: colors.info, soft: colors.infoSoft },
+    // Rojo = sucia, verde = lista: el par que el equipo escanea más rápido en el
+    // tablero de housekeeping, así que se reservan solo para esos dos extremos.
+    sucia: { color: colors.danger, soft: colors.dangerSoft },
+    en_limpieza: { color: colors.warning, soft: colors.warningSoft },
     pendiente_inspeccion: { color: colors.purple, soft: colors.purpleSoft },
     lista: { color: colors.success, soft: colors.successSoft },
-    bloqueada: { color: colors.danger, soft: colors.dangerSoft },
+    // Neutro a propósito: 'ocupada' no es un estado de trabajo pendiente, es "hay
+    // huésped" — no debe competir visualmente con los estados que sí piden acción.
+    ocupada: { color: colors.inkSoft, soft: colors.surfaceSunken },
+    // 'bloqueada' no es "sucia" ni ningún paso de limpieza — es "no se puede vender".
+    // Tono oscuro/neutro deliberadamente distinto del rojo para no confundirla con sucia.
+    bloqueada: { color: colors.ink, soft: colors.hairlineStrong },
   };
 
   const taskStatusColor: Record<string, { color: string }> = {
     pendiente: { color: colors.warning },
-    en_curso: { color: colors.info },
+    // Azul reservado para 'verificada' (ver más abajo); en curso usa el acento de marca.
+    en_curso: { color: colors.accent },
     // "Hecha" es entregada, no aprobada: se lee como un pendiente de revisar, no como un éxito.
     hecha: { color: colors.purple },
-    verificada: { color: colors.success },
+    // Azul = verificado: el estado final de confianza, distinto del verde de "lista"
+    // en habitaciones para que ambos sistemas de estado no se lean como sinónimos.
+    verificada: { color: colors.info },
     rechazada: { color: colors.danger },
     cancelada: { color: colors.inkSoft },
     vencida: { color: colors.danger },
@@ -177,8 +186,6 @@ export function roleColor(colors: Colors, role: string): string {
       return colors.danger;
     case 'jefe':
       return colors.accent;
-    case 'lider':
-      return colors.info;
     default:
       return colors.inkSoft;
   }

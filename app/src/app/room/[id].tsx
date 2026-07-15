@@ -1,12 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  TextStyle,
+  View,
+  ViewStyle,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
 import {
   AnimatedPressable,
   Button,
   cardShadow,
+  confirmAction,
   Empty,
   ErrorState,
   Pill,
@@ -15,7 +27,19 @@ import {
   Skeleton,
   notify,
 } from '../../components/ui';
-import { api, type Incident, type Room, type Task, type User } from '../../lib/api';
+import { Timeline } from '../../components/timeline';
+import {
+  api,
+  type AuditEntry,
+  type ChecklistDraft,
+  type Incident,
+  type Room,
+  type RoomChecklist,
+  type RoomStatus,
+  type Task,
+  type User,
+} from '../../lib/api';
+import { ChecklistEditor, emptyChecklistItem } from '../../components/checklist-editor';
 import { useAuth } from '../../lib/auth';
 import {
   useIncidentStatusMeta,
@@ -25,11 +49,21 @@ import {
   useT,
   useTaskStatusMeta,
   useTaskTypeLabels,
+  type TKey,
 } from '../../lib/i18n';
 import { useFadeSlideIn, useStaggerDelay } from '../../lib/motion';
-import { AREA_OF_TYPE, canSupervise, inArea, isAtLeast } from '../../lib/permissions';
+import {
+  AREA_OF_TYPE,
+  canManageStays,
+  canSetRoomStatus,
+  canSupervise,
+  inArea,
+  isAtLeast,
+  ROOM_FLOW,
+} from '../../lib/permissions';
 import { typeScale, type Colors } from '../../lib/theme';
 import { useThemedStyles, useTheme } from '../../lib/theme-context';
+import { groupByFloor } from '../../lib/utils';
 
 // Tipos de trabajo que se pueden crear sobre una habitación, en orden de uso.
 const TASK_TYPES = ['limpieza', 'inspeccion', 'mantenimiento', 'recepcion', 'cocina', 'lavanderia'];
@@ -37,6 +71,8 @@ const FREQUENCIES = ['diaria', 'semanal', 'mensual'] as const;
 type Frequency = (typeof FREQUENCIES)[number];
 const RUN_HOURS = ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
 type ScheduleMode = 'unica' | 'recurrente' | 'programada';
+const WEEK_DAYS = [1, 2, 3, 4, 5, 6, 0] as const; // empieza en lunes, más natural para el equipo
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function Selector<T extends string>({
   options,
@@ -131,13 +167,18 @@ export default function RoomDetail() {
   const incidentStatus = useIncidentStatusMeta();
   // Crear trabajo es potestad del mando; el estado de la habitación ya no se fuerza
   // a mano (lo deriva el servidor del flujo de tareas, ver server/src/index.js).
-  const isSupervisor = isAtLeast(user, 'lider');
+  const isSupervisor = isAtLeast(user, 'jefe');
 
   const [room, setRoom] = useState<Room | null>(null);
+  const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [staff, setStaff] = useState<User[]>([]);
   const [loadError, setLoadError] = useState(false);
+  const [history, setHistory] = useState<AuditEntry[]>([]);
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [stayBusy, setStayBusy] = useState(false);
+  const [weekDays, setWeekDays] = useState<Set<number>>(new Set());
 
   // Cada quien solo puede crear trabajo del área que supervisa: el líder de limpieza
   // no reparte órdenes de mantenimiento.
@@ -156,6 +197,20 @@ export default function RoomDetail() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [creating, setCreating] = useState(false);
+  // Puntos de la tarea a crear: siempre la checklist de este sitio para el tipo elegido,
+  // editable aquí mismo — editarla aquí reescribe la checklist individual de la habitación.
+  const [taskItems, setTaskItems] = useState<ChecklistDraft[]>([]);
+
+  // La checklist propia del sitio, por tipo de trabajo, y su editor.
+  const [checklist, setChecklist] = useState<RoomChecklist>({});
+  const [editType, setEditType] = useState<string | null>(null);
+  const [editItems, setEditItems] = useState<ChecklistDraft[]>([]);
+  const [savingChecklist, setSavingChecklist] = useState(false);
+
+  // Copiar la checklist de un tipo de trabajo a otras habitaciones, incluso después de creada.
+  const [copyType, setCopyType] = useState<string | null>(null);
+  const [copyTargets, setCopyTargets] = useState<Set<number>>(new Set());
+  const [copying, setCopying] = useState(false);
 
   const scheduleLabels: Record<ScheduleMode, string> = {
     unica: t('room.scheduleOnce'),
@@ -182,24 +237,36 @@ export default function RoomDetail() {
 
   const load = useCallback(async () => {
     try {
-      const [rooms, roomTasks, roomIncidents] = await Promise.all([
+      const [rooms, roomTasks, roomIncidents, entries] = await Promise.all([
         api.get<Room[]>('/api/rooms'),
         api.get<Task[]>(`/api/tasks?room_id=${id}`),
         api.get<Incident[]>(`/api/incidents?room_id=${id}`),
+        api.get<AuditEntry[]>(`/api/audit?entity=room&id=${id}`),
       ]);
       setRoom(rooms.find((r) => String(r.id) === id) ?? null);
+      setAllRooms(rooms);
       setTasks(roomTasks);
       setIncidents(roomIncidents);
+      setHistory(entries);
       setLoadError(false);
     } catch {
       setLoadError(true);
     }
   }, [id]);
 
+  const loadChecklist = useCallback(async () => {
+    try {
+      setChecklist(await api.get<RoomChecklist>(`/api/rooms/${id}/checklist`));
+    } catch {
+      // No es crítico: la ficha funciona sin la checklist propia cargada.
+    }
+  }, [id]);
+
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load])
+      if (isSupervisor) loadChecklist();
+    }, [load, loadChecklist, isSupervisor])
   );
 
   useEffect(() => {
@@ -233,9 +300,9 @@ export default function RoomDetail() {
   }
   const meta = roomStatus[room.status];
 
-  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
   const createTask = async () => {
+    const custom = taskItems.filter((i) => i.text.trim());
+
     const base = {
       room_id: room.id,
       type: newType,
@@ -243,6 +310,10 @@ export default function RoomDetail() {
       description: newDescription.trim(),
       priority: newPriority,
       assignee_id: newAssignee,
+      // La checklist editada aquí ES la checklist individual del sitio para este tipo:
+      // se persiste siempre, no hay ya un modo "a medida" que la deje sin guardar.
+      items: custom,
+      save_checklist: true,
     };
 
     if (scheduleMode === 'programada' && !DATE_RE.test(dateFrom.trim())) {
@@ -263,6 +334,7 @@ export default function RoomDetail() {
           ...base,
           freq,
           run_hours: [...hours].map((h) => parseInt(h, 10)),
+          ...(freq === 'semanal' ? { week_days: [...weekDays] } : {}),
         });
         notify(t('room.scheduleCreated'));
       } else {
@@ -281,6 +353,8 @@ export default function RoomDetail() {
       setScheduleMode('unica');
       setDateFrom('');
       setDateTo('');
+      setTaskItems([]);
+      setWeekDays(new Set());
       await load();
     } catch (e: any) {
       notify(t('common.error'), e.message);
@@ -289,8 +363,132 @@ export default function RoomDetail() {
     }
   };
 
+  // La checklist del formulario parte siempre de la checklist actual del sitio para el
+  // tipo elegido (algo real que retocar), o de un punto en blanco si el sitio no tiene.
+  const seedTaskItems = (type: string) => {
+    const seed = checklist[type as keyof RoomChecklist];
+    setTaskItems(
+      seed && seed.length > 0
+        ? seed.map((i) => ({
+            text: i.text,
+            requires_evidence: i.requires_evidence,
+            evidence_kind: i.evidence_kind,
+            min_evidence: i.min_evidence,
+          }))
+        : [emptyChecklistItem()]
+    );
+  };
+
+  const startEditChecklist = (taskType: string) => {
+    const existing = checklist[taskType as keyof RoomChecklist] ?? [];
+    setEditItems(
+      existing.length > 0
+        ? existing.map((i) => ({
+            text: i.text,
+            requires_evidence: i.requires_evidence,
+            evidence_kind: i.evidence_kind,
+            min_evidence: i.min_evidence,
+          }))
+        : [emptyChecklistItem()]
+    );
+    setEditType(taskType);
+  };
+
+  const saveChecklist = async () => {
+    if (!editType) return;
+    const clean = editItems.filter((i) => i.text.trim());
+    setSavingChecklist(true);
+    try {
+      await api.put(`/api/rooms/${room.id}/checklist`, { task_type: editType, items: clean });
+      await loadChecklist();
+      setEditType(null);
+      notify(t('room.checklistSaved'));
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setSavingChecklist(false);
+    }
+  };
+
+  const toggleCopyTarget = (targetId: number) => {
+    setCopyTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(targetId)) next.delete(targetId);
+      else next.add(targetId);
+      return next;
+    });
+  };
+
+  // Copia la checklist YA guardada de este tipo (no ediciones sin guardar) a otras
+  // habitaciones: cada una conserva su propia checklist individual, esta solo la clona.
+  const submitCopyChecklist = async () => {
+    if (!copyType || copyTargets.size === 0) return;
+    const items = checklist[copyType as keyof RoomChecklist] ?? [];
+    setCopying(true);
+    try {
+      await Promise.all(
+        [...copyTargets].map((targetId) =>
+          api.put(`/api/rooms/${targetId}/checklist`, { task_type: copyType, items })
+        )
+      );
+      notify(t('room.checklistCopied'));
+      setCopyType(null);
+      setCopyTargets(new Set());
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setCopying(false);
+    }
+  };
+
   // Asignar a alguien de otra área daría una tarea que su destinatario no puede ni abrir.
   const assignableStaff = staff.filter((s) => inArea(s, AREA_OF_TYPE[newType]));
+
+  const roomActions = ROOM_FLOW[room.status].filter((next) => canSetRoomStatus(user, room, next));
+
+  const setStatus = async (next: RoomStatus) => {
+    setStatusBusy(true);
+    try {
+      await api.patch(`/api/rooms/${room.id}`, { status: next });
+      await load();
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  const doCheckout = async () => {
+    const ok = await confirmAction(
+      t('stay.checkoutConfirmTitle'),
+      t('stay.checkoutConfirmBody'),
+      t('roomAction.checkout'),
+      t('common.cancel')
+    );
+    if (!ok) return;
+    setStayBusy(true);
+    try {
+      await api.post(`/api/rooms/${room.id}/checkout`, {});
+      notify(t('stay.checkoutDone'));
+      await load();
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setStayBusy(false);
+    }
+  };
+
+  const toggleWeekDay = (d: number) => {
+    setWeekDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(d)) {
+        if (next.size > 1) next.delete(d);
+      } else {
+        next.add(d);
+      }
+      return next;
+    });
+  };
 
   return (
     <Screen>
@@ -305,10 +503,107 @@ export default function RoomDetail() {
           <Pill label={meta.label} color={meta.color} soft={meta.soft} />
         </View>
 
+        {roomActions.length > 0 && (
+          <View style={s.actionsRow}>
+            {roomActions.map((next) => (
+              <Pressable
+                key={next}
+                disabled={statusBusy}
+                onPress={() => setStatus(next)}
+                style={[s.actionChip, { opacity: statusBusy ? 0.6 : 1 }]}
+              >
+                <Text style={s.actionChipText}>{t('roomAction.to', { status: roomStatus[next].label })}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {canManageStays(user) && room.stay_id && (
+          <View style={s.stayCard}>
+            <SectionTitle>{t('stay.title')}</SectionTitle>
+            <Text style={s.itemTitle}>{room.guest_name || t('common.unassigned')}</Text>
+            {!!room.expected_checkout && (
+              <Text style={s.itemMeta}>
+                {t('stay.expectedCheckout')}: {room.expected_checkout}
+              </Text>
+            )}
+            <View style={{ marginTop: 8 }}>
+              <Button label={t('roomAction.checkout')} kind="danger" onPress={doCheckout} loading={stayBusy} />
+            </View>
+          </View>
+        )}
+
         {isSupervisor && (
           <>
             <SectionTitle>{t('room.newTask')}</SectionTitle>
-            <Button label={t('room.createTask')} icon="add" onPress={() => setModalOpen(true)} />
+            <Button
+              label={t('room.createTask')}
+              icon="add"
+              onPress={() => {
+                seedTaskItems(newType);
+                setModalOpen(true);
+              }}
+            />
+
+            <SectionTitle>{t('room.checklistTitle')}</SectionTitle>
+            <Text style={s.checklistHint}>{t('room.checklistHint')}</Text>
+            {creatableTypes.map((ct) => {
+              const points = checklist[ct as keyof RoomChecklist] ?? [];
+              const editing = editType === ct;
+              return (
+                <View key={ct} style={s.checklistBlock}>
+                  <View style={s.checklistHeader}>
+                    <Text style={s.checklistType}>{`${taskType[ct]} · ${points.length}`}</Text>
+                    <View style={{ flexDirection: 'row', gap: 16 }}>
+                      {!editing && points.length > 0 && (
+                        <Pressable
+                          onPress={() => {
+                            setCopyType(ct);
+                            setCopyTargets(new Set());
+                          }}
+                          hitSlop={8}
+                        >
+                          <Text style={s.checklistEdit}>{t('room.checklistCopy')}</Text>
+                        </Pressable>
+                      )}
+                      <Pressable onPress={() => (editing ? setEditType(null) : startEditChecklist(ct))} hitSlop={8}>
+                        <Text style={s.checklistEdit}>
+                          {editing ? t('common.cancel') : t('room.checklistEdit')}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  {!editing &&
+                    (points.length === 0 ? (
+                      <Text style={s.checklistEmpty}>{t('room.checklistEmpty')}</Text>
+                    ) : (
+                      points.map((p) => (
+                        <View key={p.id} style={s.pointRow}>
+                          <Ionicons
+                            name={p.requires_evidence ? 'camera' : 'ellipse-outline'}
+                            size={14}
+                            color={p.requires_evidence ? colors.accent : colors.inkFaint}
+                          />
+                          <Text style={s.pointText}>{p.text}</Text>
+                        </View>
+                      ))
+                    ))}
+
+                  {editing && (
+                    <View style={{ gap: 12, marginTop: 8 }}>
+                      <ChecklistEditor items={editItems} onChange={setEditItems} />
+                      <Button
+                        label={t('common.save')}
+                        icon="checkmark"
+                        onPress={saveChecklist}
+                        loading={savingChecklist}
+                      />
+                    </View>
+                  )}
+                </View>
+              );
+            })}
           </>
         )}
 
@@ -338,6 +633,8 @@ export default function RoomDetail() {
             stSoft={incidentStatus[inc.status].soft}
           />
         ))}
+
+        <Timeline entries={history} />
       </ScrollView>
 
       <Modal
@@ -346,7 +643,10 @@ export default function RoomDetail() {
         animationType="slide"
         onRequestClose={() => setModalOpen(false)}
       >
-        <View style={s.backdrop}>
+        <KeyboardAvoidingView
+          style={s.backdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <Pressable style={{ flex: 1 }} onPress={() => setModalOpen(false)} />
           <View style={s.sheet}>
             <View style={s.sheetHandle} />
@@ -357,13 +657,18 @@ export default function RoomDetail() {
               </Pressable>
             </View>
 
-            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 8, gap: 10 }}>
+            <ScrollView
+              style={{ flexGrow: 0 }}
+              contentContainerStyle={{ paddingBottom: 8, gap: 10 }}
+              keyboardShouldPersistTaps="handled"
+            >
               <Selector
                 options={creatableTypes}
                 value={newType}
                 onChange={(v) => {
                   setNewType(v);
                   setNewAssignee(null);
+                  seedTaskItems(v);
                 }}
                 labels={taskType}
               />
@@ -412,6 +717,9 @@ export default function RoomDetail() {
                 multiline
               />
 
+              <SectionTitle>{t('room.taskChecklist')}</SectionTitle>
+              <ChecklistEditor items={taskItems} onChange={setTaskItems} />
+
               <SectionTitle>{t('room.schedule')}</SectionTitle>
               <View style={s.selector}>
                 {(['unica', 'recurrente', 'programada'] as ScheduleMode[]).map((mode) => (
@@ -441,6 +749,22 @@ export default function RoomDetail() {
                       </Pressable>
                     ))}
                   </View>
+
+                  {freq === 'semanal' && (
+                    <View style={s.selector}>
+                      {WEEK_DAYS.map((d) => (
+                        <Pressable
+                          key={d}
+                          onPress={() => toggleWeekDay(d)}
+                          style={[s.selectorChip, weekDays.has(d) && s.selectorChipActive]}
+                        >
+                          <Text style={[s.selectorText, weekDays.has(d) && s.selectorTextActive]}>
+                            {t(`weekday.${d}` as TKey)}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
 
                   <SectionTitle>{t('bulk.hours')}</SectionTitle>
                   <View style={s.selector}>
@@ -483,7 +807,55 @@ export default function RoomDetail() {
               <Button label={t('room.createTask')} onPress={createTask} loading={creating} />
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={copyType !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setCopyType(null)}
+      >
+        <KeyboardAvoidingView style={s.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={{ flex: 1 }} onPress={() => setCopyType(null)} />
+          <View style={s.sheet}>
+            <View style={s.sheetHandle} />
+            <View style={s.sheetHeader}>
+              <Text style={s.sheetTitle}>{t('room.checklistCopyTitle')}</Text>
+              <Pressable onPress={() => setCopyType(null)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.inkSoft} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ paddingBottom: 8, gap: 12 }}>
+              {groupByFloor(allRooms.filter((r) => r.id !== room.id)).map(([floor, list]) => (
+                <View key={floor}>
+                  <Text style={s.checklistHint}>{floor}</Text>
+                  <View style={s.selector}>
+                    {list.map((r) => (
+                      <Pressable
+                        key={r.id}
+                        onPress={() => toggleCopyTarget(r.id)}
+                        style={[s.selectorChip, copyTargets.has(r.id) && s.selectorChipActive]}
+                      >
+                        <Text style={[s.selectorText, copyTargets.has(r.id) && s.selectorTextActive]}>
+                          {r.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={s.sheetFooter}>
+              <Button
+                label={t('room.checklistCopySubmit', { n: copyTargets.size })}
+                onPress={submitCopyChecklist}
+                loading={copying}
+                disabled={copyTargets.size === 0}
+              />
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );
@@ -495,6 +867,26 @@ function makeStyles(colors: Colors) {
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' } as ViewStyle,
     roomName: { ...typeScale.display, fontSize: 32, lineHeight: 36, color: colors.ink } as TextStyle,
     roomMeta: { ...typeScale.body, color: colors.inkSoft } as TextStyle,
+    actionsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 } as ViewStyle,
+    actionChip: {
+      minHeight: 44,
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.hairlineStrong,
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      backgroundColor: colors.surface,
+    } as ViewStyle,
+    actionChipText: { fontSize: 13, fontWeight: '700', color: colors.ink } as TextStyle,
+    stayCard: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 14,
+      padding: 14,
+      marginTop: 12,
+      ...cardShadow(colors),
+    } as ViewStyle,
     selector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
     selectorChip: {
       borderWidth: 1,
@@ -523,6 +915,26 @@ function makeStyles(colors: Colors) {
     } as ViewStyle,
     itemTitle: { fontSize: 15, fontWeight: '700', color: colors.ink } as TextStyle,
     itemMeta: { fontSize: 12, color: colors.inkSoft } as TextStyle,
+    checklistHint: { fontSize: 12, color: colors.inkSoft, lineHeight: 17, marginBottom: 4 } as TextStyle,
+    checklistBlock: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 14,
+      padding: 12,
+      marginBottom: 8,
+      ...cardShadow(colors),
+    } as ViewStyle,
+    checklistHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    } as ViewStyle,
+    checklistType: { fontSize: 14, fontWeight: '800', color: colors.ink } as TextStyle,
+    checklistEdit: { fontSize: 13, fontWeight: '700', color: colors.accent } as TextStyle,
+    checklistEmpty: { fontSize: 13, color: colors.inkFaint, marginTop: 6 } as TextStyle,
+    pointRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 } as ViewStyle,
+    pointText: { flex: 1, fontSize: 14, color: colors.inkSoft } as TextStyle,
     input: {
       borderWidth: 1,
       borderColor: colors.hairline,

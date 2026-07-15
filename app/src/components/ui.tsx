@@ -40,13 +40,18 @@ export function notify(title: string, message?: string) {
 }
 
 // Confirmación destructiva (borrar evidencia, devolver trabajo…), también unificada.
-export function confirmAction(title: string, message: string, confirmLabel: string): Promise<boolean> {
+export function confirmAction(
+  title: string,
+  message: string,
+  confirmLabel: string,
+  cancelLabel: string
+): Promise<boolean> {
   if (Platform.OS === 'web') {
     return Promise.resolve(window.confirm(`${title}\n\n${message}`));
   }
   return new Promise((resolve) => {
     Alert.alert(title, message, [
-      { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+      { text: cancelLabel, style: 'cancel', onPress: () => resolve(false) },
       { text: confirmLabel, style: 'destructive', onPress: () => resolve(true) },
     ]);
   });
@@ -219,12 +224,14 @@ export function ErrorState({
 export function Screen({
   children,
   style,
+  slideFrom = 'up',
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
+  slideFrom?: 'up' | 'down';
 }) {
   const { colors } = useTheme();
-  const fade = useFadeSlideIn();
+  const fade = useFadeSlideIn(0, slideFrom);
   return (
     <SafeAreaView
       edges={['bottom', 'left', 'right']}
@@ -349,11 +356,13 @@ export function SegmentedControl<T extends string>({
 export function AnimatedPressable({
   children,
   onPress,
+  onLongPress,
   style,
   haptic = true,
 }: {
   children: ReactNode;
   onPress?: () => void;
+  onLongPress?: () => void;
   style?: StyleProp<ViewStyle>;
   haptic?: boolean;
 }) {
@@ -362,6 +371,7 @@ export function AnimatedPressable({
     <Animated.View style={scaleStyle}>
       <Pressable
         onPress={onPress}
+        onLongPress={onLongPress}
         onPressIn={() => {
           onPressIn();
           if (haptic) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

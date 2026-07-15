@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
-import { Button, Card, Empty, Screen, SectionTitle, notify } from '../components/ui';
+import { KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import { Button, Card, Empty, ErrorState, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
 import { api, type InventoryItem } from '../lib/api';
 import { useT } from '../lib/i18n';
 import { type Colors } from '../lib/theme';
@@ -48,7 +48,7 @@ function MovementRow({ item, onDone }: { item: InventoryItem; onDone: () => void
       <TextInput
         style={s.movementInput}
         placeholder="0"
-        placeholderTextColor={colors.inkSoft}
+        placeholderTextColor={colors.inkFaint}
         keyboardType="numeric"
         value={amount}
         onChangeText={setAmount}
@@ -75,12 +75,22 @@ export default function Inventario() {
   const [category, setCategory] = useState('general');
   const [minQty, setMinQty] = useState('');
   const [creating, setCreating] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     navigation.setOptions({ title: t('inventory.title') });
   }, [navigation, t]);
 
-  const load = () => api.get<InventoryItem[]>('/api/inventory').then(setItems).catch(() => {});
+  const load = () =>
+    api
+      .get<InventoryItem[]>('/api/inventory')
+      .then((r) => {
+        setItems(r);
+        setError(false);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     load();
@@ -106,15 +116,41 @@ export default function Inventario() {
     return acc;
   }, {});
 
+  if (!loaded) {
+    return (
+      <Screen>
+        <View style={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="card" height={140} />
+          <Skeleton variant="card" height={80} />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (error) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
-      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        style={s.screen}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <SectionTitle>{t('inventory.new')}</SectionTitle>
         <View style={s.form}>
           <TextInput
             style={s.input}
             placeholder={t('inventory.name')}
-            placeholderTextColor={colors.inkSoft}
+            placeholderTextColor={colors.inkFaint}
             value={name}
             onChangeText={setName}
           />
@@ -122,14 +158,14 @@ export default function Inventario() {
             <TextInput
               style={[s.input, { flex: 1 }]}
               placeholder={t('inventory.category')}
-              placeholderTextColor={colors.inkSoft}
+              placeholderTextColor={colors.inkFaint}
               value={category}
               onChangeText={setCategory}
             />
             <TextInput
               style={[s.input, { width: 100 }]}
               placeholder={t('inventory.minQty')}
-              placeholderTextColor={colors.inkSoft}
+              placeholderTextColor={colors.inkFaint}
               keyboardType="numeric"
               value={minQty}
               onChangeText={setMinQty}
@@ -167,6 +203,7 @@ export default function Inventario() {
           </View>
         ))}
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

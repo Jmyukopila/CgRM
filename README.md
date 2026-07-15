@@ -11,13 +11,12 @@ app/      App móvil · Expo SDK 57 (React Native + expo-router) · iOS / Androi
 
 ### Roles y áreas
 
-Cada persona tiene un **rol** (jerárquico) y, si es empleado o líder, un **área**:
+Cada persona tiene un **rol** (jerárquico) y, si es empleado, un **área**:
 
 | Rol | Alcance |
 |---|---|
 | `empleado` | Ejecuta el trabajo de **su área**. No verifica, no asigna, no ve otras áreas. |
-| `lider` | Todo lo anterior + crear, asignar, verificar y **devolver** trabajo de su área. Ve a su equipo. |
-| `jefe` | Lo mismo que un líder pero en **todas las áreas**, más inventario, reportes y alta de personal. |
+| `jefe` (dueño) | Crear, asignar, verificar y **devolver** trabajo en **todas las áreas**, más inventario, reportes y alta de personal. |
 | `admin` | Acceso total, incluido crear jefes/admins. Es el rol del desarrollador. |
 
 Áreas: `limpieza`, `mantenimiento`, `recepcion`, `cocina`, `lavanderia`, `administracion`.

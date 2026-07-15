@@ -2,9 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Redirect } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
-import { ImageStyle, KeyboardAvoidingView, Platform, Text, TextStyle, View, ViewStyle } from 'react-native';
+import { ImageStyle, KeyboardAvoidingView, Platform, Pressable, Text, TextStyle, View, ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { TextField } from '../components/form';
@@ -101,6 +101,9 @@ export default function Login() {
 
             <Animated.View style={buttonAnim}>
               <Button label={t('login.submit')} onPress={submit} loading={busy} disabled={!username || !password} />
+              <Pressable onPress={() => router.push('/registro')} hitSlop={8} style={s.registerLink}>
+                <Text style={s.registerLinkText}>{t('login.noAccount')}</Text>
+              </Pressable>
             </Animated.View>
           </View>
         </KeyboardAvoidingView>
@@ -136,10 +139,12 @@ function makeStyles(colors: Colors) {
       textAlign: 'center',
       marginBottom: 10,
     } as TextStyle,
-    // Proporción del SVG (988x296 ≈ 3.34:1).
+    // Proporción del SVG (988x296 ≈ 3.34:1). Antes 240x72: se notaba muy poco sobre
+    // el degradado de fondo, así que crece a lo más grande que cabe en la tarjeta (420
+    // de maxWidth, 32 de padding a cada lado).
     wordmark: {
-      width: 240,
-      height: 72,
+      width: 340,
+      height: 102,
       alignSelf: 'center',
     } as ImageStyle,
     fields: { gap: 12, marginTop: 18 } as ViewStyle,
@@ -152,5 +157,7 @@ function makeStyles(colors: Colors) {
       padding: 10,
     } as ViewStyle,
     errorText: { ...typeScale.caption, color: colors.danger, flex: 1 } as TextStyle,
+    registerLink: { alignItems: 'center', paddingVertical: 10, marginTop: 4 } as ViewStyle,
+    registerLinkText: { ...typeScale.caption, color: colors.accent } as TextStyle,
   };
 }

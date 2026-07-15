@@ -2,8 +2,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useFocusEffect, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ImageStyle, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
-import { Button, Chip, Empty, Pill, Screen, SectionTitle, notify } from '../components/ui';
+import {
+  FlatList,
+  ImageStyle,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  TextStyle,
+  View,
+  ViewStyle,
+} from 'react-native';
+import { Button, Chip, Empty, ErrorState, Pill, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
 import { api, type LostItem, type Room } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useLostStatusMeta, useT } from '../lib/i18n';
@@ -24,13 +35,15 @@ export default function ObjetosPerdidos() {
   const { colors } = useTheme();
   const s = useThemedStyles(makeStyles);
   const lostStatus = useLostStatusMeta();
-  const canManage = isAtLeast(user, 'lider');
+  const canManage = isAtLeast(user, 'jefe');
   const [items, setItems] = useState<LostItem[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [description, setDescription] = useState('');
   const [roomId, setRoomId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     navigation.setOptions({ title: t('lost.title') });
@@ -39,9 +52,17 @@ export default function ObjetosPerdidos() {
   const load = useCallback(async () => {
     try {
       const q = showAll ? '' : '?status=abiertos';
-      setItems(await api.get<LostItem[]>(`/api/lost-items${q}`));
+      const [list, roomList] = await Promise.all([
+        api.get<LostItem[]>(`/api/lost-items${q}`),
+        api.get<Room[]>('/api/rooms'),
+      ]);
+      setItems(list);
+      setRooms(roomList);
+      setError(false);
     } catch {
-      // reintento manual
+      setError(true);
+    } finally {
+      setLoaded(true);
     }
   }, [showAll]);
 
@@ -50,10 +71,6 @@ export default function ObjetosPerdidos() {
       load();
     }, [load])
   );
-
-  useEffect(() => {
-    api.get<Room[]>('/api/rooms').then(setRooms).catch(() => {});
-  }, []);
 
   const create = async () => {
     if (!description.trim()) return;
@@ -79,68 +96,99 @@ export default function ObjetosPerdidos() {
     }
   };
 
+  if (!loaded) {
+    return (
+      <Screen>
+        <View style={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="card" height={140} />
+          <Skeleton variant="card" height={80} />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (error) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
-      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        <SectionTitle>{t('lost.new')}</SectionTitle>
-        <View style={s.form}>
-          <TextInput
-            style={s.input}
-            placeholder={t('lost.descriptionPlaceholder')}
-            placeholderTextColor={colors.inkSoft}
-            value={description}
-            onChangeText={setDescription}
-          />
-          <Text style={s.label}>{t('lost.room')}</Text>
-          <View style={s.chips}>
-            <Chip label={t('common.optional')} active={roomId === null} onPress={() => setRoomId(null)} />
-            {rooms.map((r) => (
-              <Chip key={r.id} label={r.name} active={roomId === r.id} onPress={() => setRoomId(r.id)} />
-            ))}
-          </View>
-          <Button label={t('lost.new')} onPress={create} loading={creating} disabled={!description.trim()} />
-        </View>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <FlatList
+          style={s.screen}
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+          data={items}
+          keyExtractor={(item) => String(item.id)}
+          ListHeaderComponent={
+            <>
+              <SectionTitle>{t('lost.new')}</SectionTitle>
+              <View style={s.form}>
+                <TextInput
+                  style={s.input}
+                  placeholder={t('lost.descriptionPlaceholder')}
+                  placeholderTextColor={colors.inkFaint}
+                  value={description}
+                  onChangeText={setDescription}
+                />
+                <Text style={s.label}>{t('lost.room')}</Text>
+                <View style={s.chips}>
+                  <Chip label={t('common.optional')} active={roomId === null} onPress={() => setRoomId(null)} />
+                  {rooms.map((r) => (
+                    <Chip key={r.id} label={r.name} active={roomId === r.id} onPress={() => setRoomId(r.id)} />
+                  ))}
+                </View>
+                <Button label={t('lost.new')} onPress={create} loading={creating} disabled={!description.trim()} />
+              </View>
 
-        <Pressable onPress={() => setShowAll((v) => !v)} style={s.toggle}>
-          <Text style={s.toggleText}>{showAll ? t('lost.showAll') : t('lost.showOpen')}</Text>
-        </Pressable>
-
-        {items.length === 0 && <Empty text={t('lost.empty')} />}
-        {items.map((item) => {
-          const meta = lostStatus[item.status];
-          return (
-            <View key={item.id} style={s.card}>
-              <View style={s.cardHeader}>
-                {item.photo ? (
-                  <Image source={{ uri: item.photo }} style={s.thumb} contentFit="cover" />
-                ) : (
-                  <View style={s.thumbPlaceholder}>
-                    <Ionicons name={STATUS_ICON[item.status] ?? 'help-outline'} size={20} color={colors.inkSoft} />
+              <Pressable onPress={() => setShowAll((v) => !v)} style={s.toggle} hitSlop={8}>
+                <Text style={s.toggleText}>{showAll ? t('lost.showAll') : t('lost.showOpen')}</Text>
+              </Pressable>
+            </>
+          }
+          ListEmptyComponent={<Empty text={t('lost.empty')} />}
+          renderItem={({ item }) => {
+            const meta = lostStatus[item.status];
+            return (
+              <View style={s.card}>
+                <View style={s.cardHeader}>
+                  {item.photo ? (
+                    <Image source={{ uri: item.photo }} style={s.thumb} contentFit="cover" />
+                  ) : (
+                    <View style={s.thumbPlaceholder}>
+                      <Ionicons name={STATUS_ICON[item.status] ?? 'help-outline'} size={20} color={colors.inkSoft} />
+                    </View>
+                  )}
+                  <Text style={s.desc}>{item.description}</Text>
+                  <Pill label={meta.label} color={meta.color} soft={meta.soft} />
+                </View>
+                <Text style={s.meta}>
+                  {item.room_name ?? '—'} · {t('lost.foundBy')} {item.found_by_name}
+                </Text>
+                {item.claimant ? <Text style={s.meta}>{t('lost.claimant')}: {item.claimant}</Text> : null}
+                {canManage && item.status !== 'entregado' && (
+                  <View style={s.actions}>
+                    {item.status === 'guardado' && (
+                      <Button
+                        label={t('lost.markClaimed')}
+                        kind="ghost"
+                        onPress={() => updateStatus(item, 'reclamado')}
+                      />
+                    )}
+                    <Button label={t('lost.markDelivered')} onPress={() => updateStatus(item, 'entregado')} />
                   </View>
                 )}
-                <Text style={s.desc}>{item.description}</Text>
-                <Pill label={meta.label} color={meta.color} soft={meta.soft} />
               </View>
-              <Text style={s.meta}>
-                {item.room_name ?? '—'} · {t('lost.foundBy')} {item.found_by_name}
-              </Text>
-              {item.claimant ? <Text style={s.meta}>{t('lost.claimant')}: {item.claimant}</Text> : null}
-              {canManage && item.status !== 'entregado' && (
-                <View style={s.actions}>
-                  {item.status === 'guardado' && (
-                    <Button
-                      label={t('lost.markClaimed')}
-                      kind="ghost"
-                      onPress={() => updateStatus(item, 'reclamado')}
-                    />
-                  )}
-                  <Button label={t('lost.markDelivered')} onPress={() => updateStatus(item, 'entregado')} />
-                </View>
-              )}
-            </View>
-          );
-        })}
-      </ScrollView>
+            );
+          }}
+        />
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -161,7 +209,7 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.surface,
     } as TextStyle,
     chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
-    toggle: { paddingVertical: 12, marginTop: 8 } as ViewStyle,
+    toggle: { minHeight: 44, justifyContent: 'center', marginTop: 8 } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       backgroundColor: colors.surface,

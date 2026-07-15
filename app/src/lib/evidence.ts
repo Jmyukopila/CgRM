@@ -56,16 +56,15 @@ async function readBinary(uri: string, fallbackSize: number) {
   return { body: file as unknown as BodyInit, size: file.size ?? fallbackSize };
 }
 
-// Captura, sube y registra. Devuelve null si el usuario cancela el selector.
-export async function captureEvidence(
+// Sube y registra un asset ya elegido (por ImagePicker u otro selector propio),
+// sin volver a abrir cámara/galería. Es lo que reutiliza `captureEvidence` y lo que
+// usa un formulario que ya capturó la foto antes de tener un target (p. ej. una
+// incidencia que aún no existe): la sube en cuanto el target existe de verdad.
+export async function uploadAsset(
   kind: EvidenceKind,
-  source: Source,
+  asset: ImagePicker.ImagePickerAsset,
   target: EvidenceTarget
-): Promise<Evidence | null> {
-  const result = await pick(kind, source);
-  if (result.canceled) return null;
-
-  const asset = result.assets[0];
+): Promise<Evidence> {
   const mime = asset.mimeType ?? DEFAULT_MIME[kind];
   const { body, size } = await readBinary(asset.uri, asset.fileSize ?? 0);
 
@@ -94,6 +93,24 @@ export async function captureEvidence(
     duration_ms: asset.duration ?? null,
     storage_path: ticket.storage_path,
   });
+}
+
+// Captura, sube y registra. Devuelve null si el usuario cancela el selector.
+export async function captureEvidence(
+  kind: EvidenceKind,
+  source: Source,
+  target: EvidenceTarget
+): Promise<Evidence | null> {
+  const result = await pick(kind, source);
+  if (result.canceled) return null;
+  return uploadAsset(kind, result.assets[0], target);
+}
+
+// Solo abre el selector y devuelve el asset elegido, sin subir nada: para formularios
+// que capturan la foto antes de que exista el target al que ligarla.
+export async function pickAsset(kind: EvidenceKind, source: Source) {
+  const result = await pick(kind, source);
+  return result.canceled ? null : result.assets[0];
 }
 
 export const listEvidence = (target: { task_id?: number; incident_id?: number }) => {

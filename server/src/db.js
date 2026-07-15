@@ -26,7 +26,14 @@ for (const p of ['sslmode', 'channel_binding']) dsn.searchParams.delete(p);
 export const pool = new Pool({
   connectionString: dsn.toString(),
   ssl: { rejectUnauthorized: true },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
+
+// Neon cierra conexiones ociosas; sin este listener, un error emitido sobre un
+// cliente idle (sin nadie escuchando) tumba el proceso entero.
+pool.on('error', (err) => console.error('Error del pool de Postgres:', err.message));
 
 // Postgres devuelve bigint como string; los COUNT(*) van casteados a ::int en las
 // queries para que el API siga entregando números, como hacía SQLite.
@@ -144,12 +151,23 @@ const CHECKLISTS = {
     'Suelo limpio',
     'Consumibles repuestos',
   ],
-  // Áreas sin habitación propia: el trabajo se cuelga de una zona común (Lobby,
-  // Restaurante, Cocina común...).
+  'privada|mantenimiento': [
+    'Revisar A/C: filtro, goteo y mando',
+    'Comprobar grifería y desagües (sin fugas)',
+    'Probar luces, enchufes, TV y cerradura',
+    ev('Trabajo terminado y habitación recogida'),
+  ],
+  'zona_comun|mantenimiento': [
+    'Revisar iluminación y enchufes',
+    'Comprobar fontanería y desagües',
+    ev('Trabajo terminado y zona recogida'),
+  ],
+  // Áreas sin habitación propia: el trabajo se cuelga de una zona común (Recepción,
+  // Desayunador, Cocina...).
   'zona_comun|recepcion': [
     'Arqueo de caja de apertura',
     'Revisar llegadas y salidas del día',
-    ev('Lobby presentable: folletos, agua, orden'),
+    ev('Recepción presentable: folletos, agua, orden'),
     'Comprobar llaves y tarjetas disponibles',
     'Repasar incidencias pendientes con el turno anterior',
   ],
@@ -170,40 +188,98 @@ const CHECKLISTS = {
   ],
 };
 
+// Checklists propias de un sitio concreto, por encima de la plantilla de su tipo: lo
+// que hay que hacer en la piscina no se deduce de "es una zona común". Se siembran
+// sobre room_checklist_items al dar de alta la habitación; desde ahí las edita el
+// líder desde la app y este catálogo ya no las vuelve a tocar.
+const ROOM_CHECKLISTS = {
+  'Piscina|limpieza': [
+    ev('Recoger hojas y fondo con el limpiafondos'),
+    'Vaciar y limpiar los skimmers',
+    ev('Medir cloro y pH, corregir dosificación', 'foto'),
+    ev('Bordes, ducha y tumbonas limpios'),
+    'Ordenar cojines y mobiliario',
+  ],
+  'Piscina|mantenimiento': [
+    ev('Presión del filtro dentro de rango', 'foto'),
+    'Revisar bomba y depuradora (ruido, fugas)',
+    'Comprobar nivel de agua y llenado automático',
+    ev('Cascada y focos funcionando', 'video'),
+  ],
+  'Terraza|limpieza': [
+    ev('Barrer y fregar el suelo hidráulico'),
+    ev('Mesas, sillas y barandilla limpias'),
+    'Regar y limpiar las jardineras',
+    'Revisar la iluminación de la pérgola',
+    'Vaciar papeleras y ceniceros',
+  ],
+  'Desayunador|limpieza': [
+    ev('Mesas y superficies desinfectadas'),
+    ev('Suelo barrido y fregado'),
+    'Reponer servilletas, azúcar y condimentos',
+    'Vaciar papeleras y sacar la basura',
+    'Dejar el montaje del desayuno listo',
+  ],
+  'Cocina|limpieza': [
+    ev('Superficies y planchas limpias y desinfectadas'),
+    ev('Suelo y desagües limpios'),
+    'Sacar basura y reciclaje',
+    ev('Cierre: gas, campana y luces apagados', 'video'),
+  ],
+  'Lavandería|limpieza': [
+    'Vaciar filtros de las secadoras',
+    ev('Suelo y superficies limpios'),
+    'Ordenar la ropa limpia y las estanterías',
+    'Registrar mermas o prendas dañadas',
+  ],
+  // La especialidad de cada zona con área propia: su trabajo "de oficio", que reutiliza
+  // el contenido de la plantilla de tipo pero solo se cuelga de la zona que le toca.
+  'Recepción|recepcion': CHECKLISTS['zona_comun|recepcion'],
+  'Cocina|cocina': CHECKLISTS['zona_comun|cocina'],
+  'Lavandería|lavanderia': CHECKLISTS['zona_comun|lavanderia'],
+};
+
+// Trabajo que puede darse en cualquier zona común, se llame como se llame. El resto de
+// tipos (recepción, cocina, lavandería) solo se siembra en su zona concreta vía
+// ROOM_CHECKLISTS, no en todas: la piscina no tiene checklist de cocina.
+const ZONE_UNIVERSAL_TYPES = ['limpieza', 'inspeccion', 'mantenimiento'];
+
+// El catálogo real de Casa Gracia: 8 habitaciones (todas privadas) y las zonas donde
+// también se trabaja. Los nombres son la clave con la que la app localiza la foto real
+// de cada sitio (app/src/lib/room-photos.ts): renombrar una aquí deja su tarjeta sin foto.
 const ROOMS = [
-  // Planta 1 — habitaciones privadas y suites
-  ['101', 'Planta 1', 'privada'], ['102', 'Planta 1', 'privada'],
-  ['103', 'Planta 1', 'privada'], ['104', 'Planta 1', 'suite'],
-  ['105', 'Planta 1', 'suite'],
-  // Planta 2 — privadas
-  ['201', 'Planta 2', 'privada'], ['202', 'Planta 2', 'privada'],
-  ['203', 'Planta 2', 'privada'], ['204', 'Planta 2', 'privada'],
-  ['205', 'Planta 2', 'suite'],
-  // Planta 3 — compartidas
-  ['301', 'Planta 3', 'compartida'], ['302', 'Planta 3', 'compartida'],
-  ['303', 'Planta 3', 'compartida'], ['304', 'Planta 3', 'compartida'],
-  // Planta 4 — compartidas
-  ['401', 'Planta 4', 'compartida'], ['402', 'Planta 4', 'compartida'],
-  ['403', 'Planta 4', 'compartida'],
-  // Zonas comunes
-  ['Lobby', 'Planta 0', 'zona_comun'], ['Restaurante', 'Planta 0', 'zona_comun'],
-  ['Cocina común', 'Planta 0', 'zona_comun'], ['Terraza', 'Ático', 'zona_comun'],
+  ['101', 'Planta 1', 'privada'], // Doble Queen
+  ['102', 'Planta 1', 'privada'], // Cuádruple (2 camas dobles)
+  ['103', 'Planta 1', 'privada'], // Cuádruple, exterior
+  ['201', 'Planta 2', 'privada'], // Doble
+  ['202', 'Planta 2', 'privada'], // Doble King, exterior
+  ['203', 'Planta 2', 'privada'], // Triple (Queen + sofá cama)
+  ['301', 'Planta 3', 'privada'], // Doble Queen Superior
+  ['302', 'Planta 3', 'privada'], // Doble King Superior
+  ['Recepción', 'Zonas comunes', 'zona_comun'],
+  ['Piscina', 'Zonas comunes', 'zona_comun'],
+  ['Terraza', 'Zonas comunes', 'zona_comun'],
+  ['Desayunador', 'Zonas comunes', 'zona_comun'],
+  ['Cocina', 'Zonas comunes', 'zona_comun'],
+  ['Lavandería', 'Zonas comunes', 'zona_comun'],
 ];
 
-// [usuario, contraseña, nombre, rol, área]. El área solo aplica a empleado y líder:
+// [usuario, contraseña, nombre, rol, área]. El área solo aplica a empleado:
 // jefe y admin no viven en ninguna, las cruzan todas.
 const USERS = [
   ['admin', '1234', 'Admin (sistema)', 'admin', null],
   ['jefe', 'gracia123', 'Elena (Dirección)', 'jefe', null],
-  ['gobernanta', 'gracia123', 'Carmen (Gobernanta)', 'lider', 'limpieza'],
+  ['gobernanta', 'gracia123', 'Carmen (Gobernanta)', 'empleado', 'limpieza'],
   ['maria', 'gracia123', 'María (Limpieza)', 'empleado', 'limpieza'],
   ['lucia', 'gracia123', 'Lucía (Limpieza)', 'empleado', 'limpieza'],
-  ['jordi', 'gracia123', 'Jordi (Jefe de Mantenimiento)', 'lider', 'mantenimiento'],
+  ['jordi', 'gracia123', 'Jordi (Jefe de Mantenimiento)', 'empleado', 'mantenimiento'],
   ['pedro', 'gracia123', 'Pedro (Mantenimiento)', 'empleado', 'mantenimiento'],
-  ['sofia', 'gracia123', 'Sofía (Jefa de Recepción)', 'lider', 'recepcion'],
+  ['sofia', 'gracia123', 'Sofía (Jefa de Recepción)', 'empleado', 'recepcion'],
   ['daniel', 'gracia123', 'Daniel (Recepción)', 'empleado', 'recepcion'],
-  ['marta', 'gracia123', 'Marta (Chef)', 'lider', 'cocina'],
+  ['marta', 'gracia123', 'Marta (Chef)', 'empleado', 'cocina'],
   ['rosa', 'gracia123', 'Rosa (Lavandería)', 'empleado', 'lavanderia'],
+  // Cuenta local de pruebas (empleado raso, área limpieza) para verificar el flujo sin usar a nadie del equipo real.
+  ['empleado', 'empleado123', 'Empleado de prueba', 'empleado', 'limpieza'],
 ];
 
 const INVENTORY = [
@@ -225,7 +301,8 @@ export async function seed({ force = false } = {}) {
     await client.query(`
       TRUNCATE evidence, messages, push_tokens, task_items, tasks, incidents, lost_items,
                inventory_movements, inventory_items, checklist_template_items,
-               checklist_templates, rooms, users
+               checklist_templates, room_checklist_items, task_schedules, notifications,
+               audit_log, room_stays, rooms, users
       RESTART IDENTITY CASCADE
     `);
     await syncCatalog(client, { fresh: true });
@@ -237,6 +314,76 @@ export async function seed({ force = false } = {}) {
     client.release();
   }
   return true;
+}
+
+const TASK_TYPES = ['limpieza', 'mantenimiento', 'inspeccion', 'recepcion', 'cocina', 'lavanderia'];
+
+// Siembra la checklist propia de un sitio: la específica de ese sitio si existe
+// (ROOM_CHECKLISTS) y, si no, la plantilla de su tipo. Solo rellena los tipos de
+// trabajo que aún no tienen ni un punto propio: una checklist ya editada desde la app
+// no se pisa nunca, y por eso `npm run sync` es seguro contra producción.
+async function seedRoomChecklists(client, roomId, name, type) {
+  for (const taskType of TASK_TYPES) {
+    // La checklist específica del sitio manda; si no la hay, cae a la plantilla del tipo
+    // de habitación, pero en las zonas comunes solo para el trabajo universal (una zona
+    // no hereda el "recepción/cocina/lavandería" salvo que sea esa zona, vía ROOM_CHECKLISTS).
+    let items = ROOM_CHECKLISTS[`${name}|${taskType}`];
+    if (!items && (type !== 'zona_comun' || ZONE_UNIVERSAL_TYPES.includes(taskType))) {
+      items = CHECKLISTS[`${type}|${taskType}`];
+    }
+    if (!items) continue;
+
+    const { rows } = await client.query(
+      'SELECT 1 FROM room_checklist_items WHERE room_id = $1 AND task_type = $2 LIMIT 1',
+      [roomId, taskType]
+    );
+    if (rows.length > 0) continue;
+
+    for (const [i, item] of items.entries()) {
+      const it = typeof item === 'string' ? { text: item } : item;
+      await client.query(
+        `INSERT INTO room_checklist_items
+           (room_id, task_type, text, position, requires_evidence, evidence_kind, min_evidence)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          roomId, taskType, it.text, i,
+          it.requires_evidence ?? false,
+          it.evidence_kind ?? 'cualquiera',
+          it.min_evidence ?? 1,
+        ]
+      );
+    }
+  }
+}
+
+// Retira las habitaciones que ya no están en el catálogo (el modelo ficticio anterior:
+// 104, 105, 204, 401...). Solo borra las que no arrastran nada: si alguna tiene tareas,
+// incidencias, objetos perdidos o programaciones colgando, se queda y se avisa — este
+// script no destruye historial.
+async function pruneRooms(client) {
+  const names = ROOMS.map(([name]) => name);
+  const { rows: deleted } = await client.query(
+    `DELETE FROM rooms r
+      WHERE r.name <> ALL($1)
+        AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.room_id = r.id)
+        AND NOT EXISTS (SELECT 1 FROM incidents i WHERE i.room_id = r.id)
+        AND NOT EXISTS (SELECT 1 FROM lost_items l WHERE l.room_id = r.id)
+        AND NOT EXISTS (SELECT 1 FROM task_schedules s WHERE s.room_id = r.id)
+      RETURNING name`,
+    [names]
+  );
+  const { rows: kept } = await client.query(
+    'SELECT name FROM rooms WHERE name <> ALL($1) ORDER BY name',
+    [names]
+  );
+  if (deleted.length > 0) {
+    console.log(`Habitaciones retiradas del catálogo: ${deleted.map((r) => r.name).join(', ')}`);
+  }
+  if (kept.length > 0) {
+    console.log(
+      `Fuera del catálogo pero CON trabajo asociado (no se tocan): ${kept.map((r) => r.name).join(', ')}`
+    );
+  }
 }
 
 // --- Sincronización del catálogo (personal, habitaciones, checklists, inventario) ---
@@ -258,12 +405,16 @@ async function syncCatalog(client, { fresh = false } = {}) {
   }
 
   for (const [name, floor, type] of ROOMS) {
-    await client.query(
+    const { rows } = await client.query(
       `INSERT INTO rooms (name, floor, type) VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO UPDATE SET floor = EXCLUDED.floor, type = EXCLUDED.type`,
+       ON CONFLICT (name) DO UPDATE SET floor = EXCLUDED.floor, type = EXCLUDED.type
+       RETURNING id`,
       [name, floor, type]
     );
+    await seedRoomChecklists(client, rows[0].id, name, type);
   }
+
+  await pruneRooms(client);
 
   for (const [key, items] of Object.entries(CHECKLISTS)) {
     const [roomType, taskType] = key.split('|');

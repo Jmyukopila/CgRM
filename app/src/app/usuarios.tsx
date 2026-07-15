@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
-import { Avatar, Button, Card, Chip, Empty, Screen, SectionTitle, notify } from '../components/ui';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import { Avatar, Button, Card, Chip, Empty, ErrorState, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
 import { api, type Area, type Role, type User } from '../lib/api';
 import { useAreaLabels, useT } from '../lib/i18n';
 import { useAuth } from '../lib/auth';
@@ -10,12 +10,11 @@ import { AREAS, ROLES, canGrantRole } from '../lib/permissions';
 import { roleColor, type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
 
-// Solo empleado y líder viven en un área; el jefe y el admin las cruzan todas.
-const NEEDS_AREA = (role: Role) => role === 'empleado' || role === 'lider';
+// Solo el empleado vive en un área; el jefe y el admin las cruzan todas.
+const NEEDS_AREA = (role: Role) => role === 'empleado';
 
 const ROLE_ICON: Record<Role, keyof typeof Ionicons.glyphMap> = {
   empleado: 'person-outline',
-  lider: 'star-outline',
   jefe: 'briefcase-outline',
   admin: 'shield-outline',
 };
@@ -35,6 +34,8 @@ export default function Usuarios() {
   const [area, setArea] = useState<Area>('limpieza');
   const [creating, setCreating] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   // Un jefe da de alta a su gente; fabricar jefes y admins es cosa del administrador.
   const grantableRoles = ROLES.filter((r) => canGrantRole(me, r));
@@ -47,8 +48,12 @@ export default function Usuarios() {
     () =>
       api
         .get<User[]>(`/api/users${showInactive ? '?include_inactive=1' : ''}`)
-        .then(setUsers)
-        .catch(() => {}),
+        .then((r) => {
+          setUsers(r);
+          setError(false);
+        })
+        .catch(() => setError(true))
+        .finally(() => setLoaded(true)),
     [showInactive]
   );
 
@@ -87,15 +92,41 @@ export default function Usuarios() {
     }
   };
 
+  if (!loaded) {
+    return (
+      <Screen>
+        <View style={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="card" height={200} />
+          <Skeleton variant="card" height={64} />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (error) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
-      <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView
+        style={s.screen}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <SectionTitle>{t('users.new')}</SectionTitle>
         <View style={s.form}>
           <TextInput
             style={s.input}
             placeholder={t('users.username')}
-            placeholderTextColor={colors.inkSoft}
+            placeholderTextColor={colors.inkFaint}
             autoCapitalize="none"
             value={username}
             onChangeText={setUsername}
@@ -103,14 +134,14 @@ export default function Usuarios() {
           <TextInput
             style={s.input}
             placeholder={t('users.name')}
-            placeholderTextColor={colors.inkSoft}
+            placeholderTextColor={colors.inkFaint}
             value={name}
             onChangeText={setName}
           />
           <TextInput
             style={s.input}
             placeholder={t('users.password')}
-            placeholderTextColor={colors.inkSoft}
+            placeholderTextColor={colors.inkFaint}
             secureTextEntry
             value={password}
             onChangeText={setPassword}
@@ -146,7 +177,7 @@ export default function Usuarios() {
         </View>
 
         <SectionTitle>{t('users.title')}</SectionTitle>
-        <Pressable onPress={() => setShowInactive((v) => !v)} style={s.toggle}>
+        <Pressable onPress={() => setShowInactive((v) => !v)} style={s.toggle} hitSlop={8}>
           <Text style={s.toggleText}>{showInactive ? t('users.showActive') : t('users.showAll')}</Text>
         </Pressable>
         {users.length === 0 && <Empty text={t('users.empty')} />}
@@ -172,6 +203,7 @@ export default function Usuarios() {
           </Card>
         ))}
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -206,7 +238,7 @@ function makeStyles(colors: Colors) {
     } as ViewStyle,
     chipActive: { backgroundColor: colors.ink, borderColor: 'transparent' } as ViewStyle,
     chipText: { fontSize: 13, fontWeight: '700', color: colors.ink } as TextStyle,
-    toggle: { paddingVertical: 6, marginBottom: 8 } as ViewStyle,
+    toggle: { minHeight: 44, justifyContent: 'center', marginBottom: 8 } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       flexDirection: 'row',

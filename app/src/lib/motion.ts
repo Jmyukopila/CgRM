@@ -22,9 +22,11 @@ export function useStaggerDelay(index: number): number {
   return Math.min(index, STAGGER_CAP) * STAGGER_STEP;
 }
 
-// Entrada fade + slide-up sutil.
-export function useFadeSlideIn(delay = 0) {
+// Entrada fade + slide sutil. 'up' (por defecto) entra desde abajo; 'down' entra
+// desde arriba, de arriba a abajo (perfil, por ejemplo).
+export function useFadeSlideIn(delay = 0, direction: 'up' | 'down' = 'up') {
   const progress = useSharedValue(0);
+  const offset = direction === 'down' ? -16 : 12;
 
   useEffect(() => {
     progress.value = withDelay(delay, withTiming(1, { duration: DURATION.base, easing: EASE }));
@@ -32,7 +34,7 @@ export function useFadeSlideIn(delay = 0) {
 
   return useAnimatedStyle(() => ({
     opacity: progress.value,
-    transform: [{ translateY: (1 - progress.value) * 12 }],
+    transform: [{ translateY: (1 - progress.value) * offset }],
   }));
 }
 

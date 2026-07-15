@@ -6,3 +6,4 @@ dist/
 web-build/
 *.log
 .env*
+!server/.env.example

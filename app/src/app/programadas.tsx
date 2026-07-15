@@ -2,11 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
-import { Button, Empty, Pill, Screen, notify, confirmAction } from '../components/ui';
+import { Button, Empty, ErrorState, Pill, Screen, Skeleton, notify, confirmAction } from '../components/ui';
 import { api, type ScheduleFreq, type TaskSchedule } from '../lib/api';
-import { usePriorityMeta, useT, useTaskTypeLabels } from '../lib/i18n';
+import { usePriorityMeta, useT, useTaskTypeLabels, type TKey } from '../lib/i18n';
 import { type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
+
+const WEEK_DAYS_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
 export default function Programadas() {
   const navigation = useNavigation();
@@ -16,6 +18,8 @@ export default function Programadas() {
   const priority = usePriorityMeta();
   const taskType = useTaskTypeLabels();
   const [schedules, setSchedules] = useState<TaskSchedule[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState(false);
 
   const freqLabels: Record<ScheduleFreq, string> = {
     una_vez: t('bulk.freq.una_vez'),
@@ -27,8 +31,11 @@ export default function Programadas() {
   const load = useCallback(async () => {
     try {
       setSchedules(await api.get<TaskSchedule[]>('/api/task-schedules'));
+      setError(false);
     } catch {
-      // reintento manual
+      setError(true);
+    } finally {
+      setLoaded(true);
     }
   }, []);
 
@@ -43,7 +50,8 @@ export default function Programadas() {
     const ok = await confirmAction(
       t('schedules.cancelConfirmTitle'),
       t('schedules.cancelConfirmBody'),
-      t('schedules.cancel')
+      t('schedules.cancel'),
+      t('common.cancel')
     );
     if (!ok) return;
     try {
@@ -57,8 +65,17 @@ export default function Programadas() {
   return (
     <Screen>
       <ScrollView style={s.screen} contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-        {schedules.length === 0 && <Empty text={t('schedules.empty')} icon="repeat-outline" />}
-        {schedules.map((sch) => (
+        {!loaded && (
+          <View style={{ gap: 10 }}>
+            <Skeleton variant="card" height={110} />
+            <Skeleton variant="card" height={110} />
+          </View>
+        )}
+        {loaded && error && (
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+        )}
+        {loaded && !error && schedules.length === 0 && <Empty text={t('schedules.empty')} icon="repeat-outline" />}
+        {loaded && !error && schedules.map((sch) => (
           <View key={sch.id} style={s.card}>
             <View style={s.cardHeader}>
               <Text style={s.roomName}>{sch.room_name}</Text>
@@ -71,6 +88,11 @@ export default function Programadas() {
                 {freqLabels[sch.freq]} · {t('schedules.hours', { hours: [...sch.run_hours].sort((a, b) => a - b).map((h) => `${String(h).padStart(2, '0')}:00`).join(' · ') })}
               </Text>
             </View>
+            {sch.freq === 'semanal' && sch.week_days && (
+              <Text style={s.meta}>
+                {WEEK_DAYS_ORDER.filter((d) => sch.week_days!.includes(d)).map((d) => t(`weekday.${d}` as TKey)).join(' · ')}
+              </Text>
+            )}
             {sch.date_to && <Text style={s.meta}>{t('schedules.until', { date: sch.date_to })}</Text>}
             <Text style={s.meta}>{sch.assignee_name ?? t('common.unassigned')}</Text>
             <View style={s.actions}>

@@ -1,6 +1,6 @@
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
+import { FlatList, Pressable, RefreshControl, Text, TextStyle, View, ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { AnimatedPressable, cardShadow, Empty, ErrorState, Pill, Screen, Skeleton } from '../../components/ui';
 import { api, type Task } from '../../lib/api';
@@ -69,7 +69,7 @@ export default function Tareas() {
   // el empleado ve lo suyo y lo que está sin coger en su área.
   const load = useCallback(async () => {
     try {
-      const mine = isAtLeast(user, 'lider') ? '' : 'mine=1&';
+      const mine = isAtLeast(user, 'jefe') ? '' : 'mine=1&';
       const status = showClosed ? '' : 'status=abiertas';
       setTasks(await api.get<Task[]>(`/api/tasks?${mine}${status}`));
       setError(false);
@@ -89,57 +89,65 @@ export default function Tareas() {
     }, [load])
   );
 
+  if (!loaded) {
+    return (
+      <Screen>
+        <View style={{ padding: 16, gap: 10 }}>
+          <Skeleton variant="card" height={92} />
+          <Skeleton variant="card" height={92} />
+          <Skeleton variant="card" height={92} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
-      <ScrollView
-        style={s.screen}
-        contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={async () => {
-              setRefreshing(true);
-              await load();
-              setRefreshing(false);
-            }}
-            tintColor={colors.accent}
-          />
-        }
-      >
-        <Pressable onPress={() => setShowClosed((v) => !v)} style={s.toggle}>
-          <Text style={s.toggleText}>
-            {showClosed ? t('tasks.showAll') : t('tasks.showOpen')}
-          </Text>
-        </Pressable>
-
-        {!loaded && (
-          <View style={{ gap: 10 }}>
-            <Skeleton variant="card" height={92} />
-            <Skeleton variant="card" height={92} />
-            <Skeleton variant="card" height={92} />
-          </View>
-        )}
-
-        {loaded && error && <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />}
-        {loaded && !error && tasks.length === 0 && <Empty text={t('tasks.empty')} icon="sunny-outline" />}
-
-        {tasks.map((task, i) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            index={i}
-            st={taskStatus[task.status]}
-            pr={priority[task.priority]}
-            typeLabel={taskType[task.type]}
-          />
-        ))}
-
-        {isAtLeast(user, 'lider') && (
-          <Pressable onPress={() => router.push('/nueva-tarea-masiva' as any)} style={s.bulkButton}>
-            <Text style={s.bulkButtonText}>{t('tasks.bulkNew')}</Text>
-          </Pressable>
-        )}
-      </ScrollView>
+      {error ? (
+        <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+          <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+        </View>
+      ) : (
+        <FlatList
+          style={s.screen}
+          contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+          data={tasks}
+          keyExtractor={(task) => String(task.id)}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await load();
+                setRefreshing(false);
+              }}
+              tintColor={colors.accent}
+            />
+          }
+          ListHeaderComponent={
+            <Pressable onPress={() => setShowClosed((v) => !v)} style={s.toggle} hitSlop={8}>
+              <Text style={s.toggleText}>{showClosed ? t('tasks.showAll') : t('tasks.showOpen')}</Text>
+            </Pressable>
+          }
+          ListEmptyComponent={<Empty text={t('tasks.empty')} icon="sunny-outline" />}
+          renderItem={({ item, index }) => (
+            <TaskRow
+              task={item}
+              index={index}
+              st={taskStatus[item.status]}
+              pr={priority[item.priority]}
+              typeLabel={taskType[item.type]}
+            />
+          )}
+          ListFooterComponent={
+            isAtLeast(user, 'jefe') ? (
+              <Pressable onPress={() => router.push('/nueva-tarea-masiva' as any)} style={s.bulkButton}>
+                <Text style={s.bulkButtonText}>{t('tasks.bulkNew')}</Text>
+              </Pressable>
+            ) : null
+          }
+        />
+      )}
     </Screen>
   );
 }
@@ -147,7 +155,7 @@ export default function Tareas() {
 function makeStyles(colors: Colors) {
   return {
     screen: { flex: 1 } as ViewStyle,
-    toggle: { paddingVertical: 6, marginBottom: 8 } as ViewStyle,
+    toggle: { minHeight: 44, justifyContent: 'center', marginBottom: 8 } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       backgroundColor: colors.surface,

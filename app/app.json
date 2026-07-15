@@ -11,6 +11,8 @@
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.casagracia.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#FAF6F0",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -33,11 +35,15 @@
           "imageWidth": 76
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "apiUrl": "https://TU-SERVIDOR.com"
     }
   }
 }

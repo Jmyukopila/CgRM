@@ -3,57 +3,71 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ImageStyle, Pressable, RefreshControl, ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
+import {
+  ImageStyle,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextStyle,
+  View,
+  ViewStyle,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
-import { AnimatedPressable, cardShadow, Empty, ErrorState, Pill, Screen, Skeleton } from '../../components/ui';
-import { api, type Room } from '../../lib/api';
+import { AnimatedPressable, Button, cardShadow, Empty, ErrorState, Pill, Screen, Skeleton, notify } from '../../components/ui';
+import { api, type Room, type RoomStatus } from '../../lib/api';
 import { useRoomStatusMeta, useRoomTypeLabels, useT } from '../../lib/i18n';
 import { useFadeSlideIn, useStaggerDelay } from '../../lib/motion';
+import { useAuth } from '../../lib/auth';
+import { canManageStays, canSetRoomStatus, ROOM_FLOW } from '../../lib/permissions';
+import { roomIcon, roomPhoto } from '../../lib/room-photos';
 import { fonts, radius, typeScale, type Colors } from '../../lib/theme';
 import { useThemedStyles, useTheme } from '../../lib/theme-context';
 import { groupByFloor } from '../../lib/utils';
 
-const FILTERS = ['todas', 'sucia', 'en_limpieza', 'pendiente_inspeccion', 'lista', 'bloqueada'];
-
-// Ocho fotos genéricas del hotel, sin mapeo real por habitación: se asigna por
-// id módulo 8 para que cada habitación conserve siempre la misma foto entre
-// renders y sesiones, y la rotación aguante más habitaciones que fotos.
-const ROOM_PHOTOS = [
-  require('../../../assets/images/rooms/room-1.jpg'),
-  require('../../../assets/images/rooms/room-2.jpg'),
-  require('../../../assets/images/rooms/room-3.jpg'),
-  require('../../../assets/images/rooms/room-4.jpg'),
-  require('../../../assets/images/rooms/room-5.jpg'),
-  require('../../../assets/images/rooms/room-6.jpg'),
-  require('../../../assets/images/rooms/room-7.jpg'),
-  require('../../../assets/images/rooms/room-8.jpg'),
-];
-const photoFor = (room: Room) => ROOM_PHOTOS[room.id % ROOM_PHOTOS.length];
+const FILTERS = ['todas', 'sucia', 'en_limpieza', 'pendiente_inspeccion', 'lista', 'ocupada', 'bloqueada'];
 
 function RoomCard({
   room,
   index,
   meta,
   typeLabel,
+  onLongPress,
 }: {
   room: Room;
   index: number;
   meta: { label: string; color: string; soft: string };
   typeLabel: string;
+  onLongPress: () => void;
 }) {
   const { colors } = useTheme();
   const s = useThemedStyles(makeStyles);
   const fade = useFadeSlideIn(useStaggerDelay(index));
+  const photo = roomPhoto(room);
   return (
     <Animated.View style={[s.cardWrap, fade]}>
-      <AnimatedPressable onPress={() => router.push(`/room/${room.id}`)} style={s.card}>
+      <AnimatedPressable onPress={() => router.push(`/room/${room.id}`)} onLongPress={onLongPress} style={s.card}>
         <View>
-          <Image source={photoFor(room)} style={s.cardPhoto} contentFit="cover" transition={150} />
+          {photo ? (
+            <Image source={photo} style={s.cardPhoto} contentFit="cover" transition={150} />
+          ) : (
+            // Sitio sin foto real (Cocina, Lavandería): icono del oficio antes que la
+            // foto de otro sitio, que sería mentir sobre lo que se está mirando.
+            <View style={[s.cardPhoto, s.cardPhotoEmpty]}>
+              <Ionicons name={roomIcon(room)} size={40} color={colors.inkFaint} />
+            </View>
+          )}
           {/* Velo de abajo hacia arriba: la ficha (nombre + estado) se lee como el pie
               de foto de un dossier de habitaciones, no como una tarjeta de app suelta. */}
           <LinearGradient colors={['transparent', colors.overlay]} style={s.photoGradient} />
-          {(room.open_incidents > 0 || room.open_tasks > 0) && (
+          {(room.open_incidents > 0 || room.open_tasks > 0 || room.stay_id) && (
             <View style={s.cardBadges}>
+              {!!room.stay_id && (
+                <View style={s.badge}>
+                  <Ionicons name="person" size={13} color={s.inkSoftIcon.color as string} />
+                </View>
+              )}
               {room.open_incidents > 0 && (
                 <View style={s.badge}>
                   <Ionicons name="warning" size={13} color={s.dangerIcon.color as string} />
@@ -83,6 +97,7 @@ function RoomCard({
 
 export default function Panel() {
   const { t } = useT();
+  const { user } = useAuth();
   const { colors } = useTheme();
   const s = useThemedStyles(makeStyles);
   const roomStatus = useRoomStatusMeta();
@@ -92,6 +107,8 @@ export default function Panel() {
   const [error, setError] = useState(false);
   const [filter, setFilter] = useState('todas');
   const [refreshing, setRefreshing] = useState(false);
+  const [activeRoom, setActiveRoom] = useState<Room | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -123,6 +140,22 @@ export default function Panel() {
     const filtered = filter === 'todas' ? rooms : rooms.filter((r) => r.status === filter);
     return groupByFloor(filtered);
   }, [rooms, filter]);
+
+  const roomActions = activeRoom ? ROOM_FLOW[activeRoom.status].filter((next) => canSetRoomStatus(user, activeRoom, next)) : [];
+
+  const setStatus = async (next: RoomStatus) => {
+    if (!activeRoom) return;
+    setActionBusy(true);
+    try {
+      await api.patch(`/api/rooms/${activeRoom.id}`, { status: next });
+      setActiveRoom(null);
+      await load();
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   return (
     <Screen>
@@ -178,12 +211,57 @@ export default function Panel() {
             <Text style={s.floor}>{floor}</Text>
             <View style={s.grid}>
               {list.map((room, i) => (
-                <RoomCard key={room.id} room={room} index={i} meta={roomStatus[room.status]} typeLabel={roomType[room.type]} />
+                <RoomCard
+                  key={room.id}
+                  room={room}
+                  index={i}
+                  meta={roomStatus[room.status]}
+                  typeLabel={roomType[room.type]}
+                  onLongPress={() => setActiveRoom(room)}
+                />
               ))}
             </View>
           </View>
         ))}
       </ScrollView>
+
+      <Modal visible={!!activeRoom} transparent animationType="fade" onRequestClose={() => setActiveRoom(null)}>
+        <Pressable style={s.sheetBackdrop} onPress={() => setActiveRoom(null)}>
+          <Pressable style={s.sheetCard} onPress={() => {}}>
+            {activeRoom && (
+              <>
+                <Text style={s.sheetTitle}>{activeRoom.name}</Text>
+                <Text style={s.sheetSubtitle}>{roomStatus[activeRoom.status].label}</Text>
+                <View style={s.sheetActions}>
+                  {roomActions.map((next) => (
+                    <Pressable
+                      key={next}
+                      disabled={actionBusy}
+                      onPress={() => setStatus(next)}
+                      style={[s.sheetChip, { opacity: actionBusy ? 0.6 : 1 }]}
+                    >
+                      <Text style={s.sheetChipText}>{t('roomAction.to', { status: roomStatus[next].label })}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+                {canManageStays(user) && (
+                  <View style={{ marginTop: 12 }}>
+                    <Button
+                      label={t('roomAction.openRoom')}
+                      kind="ghost"
+                      onPress={() => {
+                        const id = activeRoom.id;
+                        setActiveRoom(null);
+                        router.push(`/room/${id}`);
+                      }}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -228,6 +306,11 @@ function makeStyles(colors: Colors) {
       borderTopLeftRadius: radius.md - 1,
       borderTopRightRadius: radius.md - 1,
     } as ImageStyle,
+    cardPhotoEmpty: {
+      backgroundColor: colors.surfaceSunken,
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
     photoGradient: {
       position: 'absolute',
       left: 0,
@@ -269,5 +352,32 @@ function makeStyles(colors: Colors) {
     badgeText: { fontFamily: fonts.uiBold, fontSize: 12, color: colors.inkSoft } as TextStyle,
     dangerIcon: { color: colors.danger } as TextStyle,
     inkSoftIcon: { color: colors.inkSoft } as TextStyle,
+    sheetBackdrop: {
+      flex: 1,
+      backgroundColor: colors.overlay,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    } as ViewStyle,
+    sheetCard: {
+      width: '100%',
+      backgroundColor: colors.bg,
+      borderRadius: radius.lg,
+      padding: 20,
+      ...cardShadow(colors),
+    } as ViewStyle,
+    sheetTitle: { ...typeScale.heading, color: colors.ink } as TextStyle,
+    sheetSubtitle: { ...typeScale.caption, color: colors.inkSoft, marginTop: 2, marginBottom: 12 } as TextStyle,
+    sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
+    sheetChip: {
+      minHeight: 44,
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: colors.hairlineStrong,
+      borderRadius: radius.pill,
+      paddingHorizontal: 14,
+      backgroundColor: colors.surface,
+    } as ViewStyle,
+    sheetChipText: { fontFamily: fonts.uiBold, fontSize: 13, color: colors.ink } as TextStyle,
   };
 }

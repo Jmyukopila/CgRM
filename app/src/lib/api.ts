@@ -5,8 +5,16 @@ import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
+// Prioridad de resolución del backend:
+//   1. EXPO_PUBLIC_API_URL  — variable de entorno inyectada en el build.
+//   2. extra.apiUrl (app.json) — queda baqueada dentro de la APK instalada.
+//   3. host del bundler de Expo — solo en desarrollo (web/emulador/LAN).
+// En una APK real hostUri es undefined, así que extra.apiUrl es OBLIGATORIO:
+// sin él la app intentaría hablar con localhost (el propio teléfono) y no conectaría.
+const extra = Constants.expoConfig?.extra as { apiUrl?: string } | undefined;
 const devHost = Constants.expoConfig?.hostUri?.split(':')[0] ?? 'localhost';
-export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? `http://${devHost}:4000`;
+export const API_URL =
+  process.env.EXPO_PUBLIC_API_URL || extra?.apiUrl || `http://${devHost}:4000`;
 
 let authToken: string | null = null;
 export function setToken(token: string | null) {
@@ -21,15 +29,30 @@ export class ApiError extends Error {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    // status 0 = fallo de red/timeout (nunca llegó a haber respuesta del servidor),
+    // para que las pantallas lo distingan de un error de negocio (4xx/5xx).
+    const timedOut = err instanceof Error && err.name === 'AbortError';
+    throw new ApiError(0, timedOut ? 'El servidor tardó demasiado en responder' : 'No hay conexión con el servidor');
+  } finally {
+    clearTimeout(timeout);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error ?? `Error ${res.status}`);
   return data as T;
@@ -38,6 +61,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
+  put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
 };
@@ -72,7 +96,7 @@ export async function downloadCsv(path: string, filename: string) {
 
 // --- Tipos del dominio --------------------------------------------------------
 
-export type Role = 'empleado' | 'lider' | 'jefe' | 'admin';
+export type Role = 'empleado' | 'jefe' | 'admin';
 export type Area =
   | 'limpieza' | 'mantenimiento' | 'recepcion' | 'cocina' | 'lavanderia' | 'administracion';
 
@@ -86,15 +110,62 @@ export interface User {
   active: boolean;
 }
 
+export type RoomStatus =
+  | 'sucia' | 'en_limpieza' | 'pendiente_inspeccion' | 'lista' | 'ocupada' | 'bloqueada';
+
 export interface Room {
   id: number;
   name: string;
   floor: string;
   type: string;
-  status: string;
+  status: RoomStatus;
   notes: string;
   open_tasks: number;
   open_incidents: number;
+  // Estancia activa (null si la habitación está libre).
+  stay_id: number | null;
+  guest_name: string | null;
+  expected_checkout: string | null;
+}
+
+export interface RoomStay {
+  id: number;
+  room_id: number;
+  guest_name: string;
+  notes: string;
+  checkin_at: string;
+  expected_checkout: string | null;
+  checkout_at: string | null;
+  checked_in_by: number;
+  checked_in_by_name: string;
+  checked_out_by: number | null;
+  checked_out_by_name: string | null;
+}
+
+export type AuditEntity = 'task' | 'incident' | 'room';
+
+export interface AuditEntry {
+  id: number;
+  action: string;
+  from_value: string | null;
+  to_value: string | null;
+  note: string;
+  actor_name: string | null;
+  created_at: string;
+}
+
+export type NotificationType =
+  | 'task_assigned' | 'task_review' | 'incident' | 'message' | 'checkout';
+
+export interface AppNotification {
+  id: number;
+  type: NotificationType;
+  title: string;
+  body: string;
+  ref_type: 'task' | 'incident' | 'room' | null;
+  ref_id: number | null;
+  read_at: string | null;
+  created_at: string;
 }
 
 export type EvidenceKind = 'foto' | 'video';
@@ -113,6 +184,30 @@ export interface TaskItem {
   evidence_kind: EvidenceKind | 'cualquiera';
   min_evidence: number;
   evidence_count: number;
+}
+
+// Un punto de la checklist PROPIA de una habitación: la que se copia a cada tarea nueva
+// de ese tipo de trabajo en ese sitio. Editarla no toca las tareas ya repartidas.
+export interface RoomChecklistItem {
+  id: number;
+  task_type: TaskType;
+  text: string;
+  position: number;
+  requires_evidence: boolean;
+  evidence_kind: EvidenceKind | 'cualquiera';
+  min_evidence: number;
+}
+
+// GET /api/rooms/:id/checklist devuelve los puntos agrupados por tipo de trabajo.
+export type RoomChecklist = Partial<Record<TaskType, RoomChecklistItem[]>>;
+
+// Lo que la app manda al crear una tarea con puntos a medida o al reescribir la checklist
+// de una habitación: sin id (aún no existe) y sin posición (la fija el orden del array).
+export interface ChecklistDraft {
+  text: string;
+  requires_evidence: boolean;
+  evidence_kind: EvidenceKind | 'cualquiera';
+  min_evidence: number;
 }
 
 export interface Evidence {
@@ -154,6 +249,9 @@ export interface Task {
   review_note: string;
   reviewed_by: number | null;
   reviewed_by_name: string | null;
+  // Quién hizo el trabajo de verdad: obligatorio al marcar la tarea como hecha,
+  // porque la cuenta asignada puede no ser la persona que la ejecutó.
+  done_by_name: string | null;
   room_name: string;
   room_floor: string;
   assignee_name: string | null;
@@ -187,6 +285,8 @@ export interface Summary {
   openIncidents: number;
   // Trabajo entregado esperando revisión: la bandeja de entrada del líder.
   pendingReview: number;
+  // Por tipo de tarea, para los anillos del panel de control.
+  tasksByType: Record<string, { terminado: number; en_progreso: number; no_iniciado: number }>;
 }
 
 export interface LostItem {
@@ -230,6 +330,9 @@ export interface TaskSchedule {
   run_hours: number[];
   date_from: string;
   date_to: string | null;
+  // Días de la semana (0=domingo..6=sábado) para freq='semanal'; null = un solo día,
+  // el de la semana de date_from (comportamiento previo a la recurrencia multi-día).
+  week_days: number[] | null;
   active: boolean;
   created_by_name: string;
   created_at: string;

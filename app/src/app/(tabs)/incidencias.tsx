@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
+import { FlatList, Pressable, RefreshControl, Text, TextStyle, View, ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { AnimatedPressable, cardShadow, Empty, ErrorState, Pill, Screen, Skeleton } from '../../components/ui';
 import { api, type Incident } from '../../lib/api';
@@ -80,40 +80,46 @@ export default function Incidencias() {
   return (
     <Screen>
       <View style={s.screen}>
-        <ScrollView
-          contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={async () => {
-                setRefreshing(true);
-                await load();
-                setRefreshing(false);
-              }}
-              tintColor={colors.accent}
-            />
-          }
-        >
-          <Pressable onPress={() => setShowClosed((v) => !v)} style={s.toggle}>
-            <Text style={s.toggleText}>
-              {showClosed ? t('incidents.showAll') : t('incidents.showOpen')}
-            </Text>
-          </Pressable>
-
-          {!loaded && (
-            <View style={{ gap: 10 }}>
-              <Skeleton variant="card" height={80} />
-              <Skeleton variant="card" height={80} />
-            </View>
-          )}
-
-          {loaded && error && <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />}
-          {loaded && !error && incidents.length === 0 && <Empty text={t('incidents.empty')} icon="shield-checkmark-outline" />}
-
-          {incidents.map((inc, i) => (
-            <IncidentRow key={inc.id} inc={inc} index={i} st={INC_STATUS[inc.status]} pr={priority[inc.priority]} />
-          ))}
-        </ScrollView>
+        {!loaded && (
+          <View style={{ padding: 16, gap: 10 }}>
+            <Skeleton variant="card" height={80} />
+            <Skeleton variant="card" height={80} />
+          </View>
+        )}
+        {loaded && error && (
+          <View style={{ flex: 1, justifyContent: 'center', padding: 16 }}>
+            <ErrorState text={t('common.connectionError')} retryLabel={t('common.retry')} onRetry={load} />
+          </View>
+        )}
+        {loaded && !error && (
+          <FlatList
+            data={incidents}
+            keyExtractor={(inc) => String(inc.id)}
+            contentContainerStyle={{ padding: 16, paddingBottom: 96 }}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  setRefreshing(true);
+                  await load();
+                  setRefreshing(false);
+                }}
+                tintColor={colors.accent}
+              />
+            }
+            ListHeaderComponent={
+              <Pressable onPress={() => setShowClosed((v) => !v)} style={s.toggle} hitSlop={8}>
+                <Text style={s.toggleText}>
+                  {showClosed ? t('incidents.showAll') : t('incidents.showOpen')}
+                </Text>
+              </Pressable>
+            }
+            ListEmptyComponent={<Empty text={t('incidents.empty')} icon="shield-checkmark-outline" />}
+            renderItem={({ item, index }) => (
+              <IncidentRow inc={item} index={index} st={INC_STATUS[item.status]} pr={priority[item.priority]} />
+            )}
+          />
+        )}
 
         <AnimatedPressable style={s.fab} onPress={() => router.push('/nueva-incidencia')}>
           <Ionicons name="add" size={28} color={colors.onAccent} />
@@ -127,7 +133,7 @@ export default function Incidencias() {
 function makeStyles(colors: Colors) {
   return {
     screen: { flex: 1 } as ViewStyle,
-    toggle: { paddingVertical: 6, marginBottom: 8 } as ViewStyle,
+    toggle: { minHeight: 44, justifyContent: 'center', marginBottom: 8 } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       backgroundColor: colors.surface,

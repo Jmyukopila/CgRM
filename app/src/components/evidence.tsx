@@ -35,7 +35,7 @@ function Thumb({
   };
 
   const remove = async () => {
-    const ok = await confirmAction(t('evidence.delete'), t('evidence.deleteConfirm'), t('evidence.delete'));
+    const ok = await confirmAction(t('evidence.delete'), t('evidence.deleteConfirm'), t('evidence.delete'), t('common.cancel'));
     if (!ok) return;
     try {
       await deleteEvidence(item.id);

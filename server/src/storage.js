@@ -127,6 +127,25 @@ export async function createReadUrls(paths) {
   return out;
 }
 
+// Comprueba que el fichero está realmente subido antes de registrar la evidencia:
+// sin esto, un cliente podía pedir upload-url, saltarse el PUT y registrar igual un
+// punto que exige foto/vídeo sin haber subido nada.
+export async function fileExists(storagePath) {
+  if (DRIVER === 'local') {
+    try {
+      await fs.access(path.join(UPLOAD_DIR, storagePath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const res = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/info/${BUCKET}/${storagePath}`,
+    { headers: { Authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY } }
+  );
+  return res.ok;
+}
+
 export async function removeFile(storagePath) {
   if (DRIVER === 'local') {
     await fs.rm(path.join(UPLOAD_DIR, storagePath), { force: true });

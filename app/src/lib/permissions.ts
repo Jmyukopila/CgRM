@@ -1,14 +1,14 @@
 // Espejo de server/src/permissions.js. La API es la que manda: esto solo evita
 // enseñar botones que el servidor va a rechazar con un 403.
-import type { Area, Role, Task, User } from './api';
+import type { Area, Role, Room, RoomStatus, Task, User } from './api';
 
 export const AREAS: Area[] = [
   'limpieza', 'mantenimiento', 'recepcion', 'cocina', 'lavanderia', 'administracion',
 ];
 
-export const ROLES: Role[] = ['empleado', 'lider', 'jefe', 'admin'];
+export const ROLES: Role[] = ['empleado', 'jefe', 'admin'];
 
-const RANK: Record<Role, number> = { empleado: 1, lider: 2, jefe: 3, admin: 4 };
+const RANK: Record<Role, number> = { empleado: 1, jefe: 2, admin: 3 };
 
 export const isAtLeast = (user: User | null, role: Role) =>
   !!user && RANK[user.role] >= RANK[role];
@@ -23,12 +23,11 @@ export function canWorkTask(user: User | null, task: Task) {
   if (isAtLeast(user, 'jefe')) return true;
   if (!inArea(user, task.area)) return false;
   if (task.assignee_id === user.id) return true;
-  if (task.assignee_id === null) return true;
-  return user.role === 'lider';
+  return task.assignee_id === null;
 }
 
 export const canSupervise = (user: User | null, area: Area) =>
-  isAtLeast(user, 'lider') && inArea(user, area);
+  isAtLeast(user, 'jefe') && inArea(user, area);
 
 // Nadie firma su propio trabajo (salvo el admin, que depura el sistema).
 export function canReviewTask(user: User | null, task: Task) {
@@ -41,7 +40,7 @@ export function canReviewTask(user: User | null, task: Task) {
 export const canManageUsers = (user: User | null) => isAtLeast(user, 'jefe');
 
 export const canGrantRole = (user: User | null, role: Role) =>
-  user?.role === 'admin' || (user?.role === 'jefe' && ['empleado', 'lider'].includes(role));
+  user?.role === 'admin' || (user?.role === 'jefe' && role === 'empleado');
 
 export const canManageOps = (user: User | null) => isAtLeast(user, 'jefe');
 
@@ -54,3 +53,30 @@ export const AREA_OF_TYPE: Record<string, Area> = {
   lavanderia: 'lavanderia',
   general: 'administracion',
 };
+
+// Transiciones manuales válidas de estado de habitación. 'ocupada' queda fuera:
+// solo entra/sale por check-in/check-out (POST /api/rooms/:id/checkin|checkout).
+export const ROOM_FLOW: Record<RoomStatus, RoomStatus[]> = {
+  sucia: ['en_limpieza', 'bloqueada'],
+  en_limpieza: ['sucia', 'pendiente_inspeccion', 'bloqueada'],
+  pendiente_inspeccion: ['en_limpieza', 'lista', 'bloqueada'],
+  lista: ['sucia', 'bloqueada'],
+  ocupada: [],
+  bloqueada: ['sucia'],
+};
+
+// Espejo exacto de canSetRoomStatus en server/src/permissions.js.
+export function canSetRoomStatus(user: User | null, room: Room, next: RoomStatus) {
+  if (!user) return false;
+  if (user.role === 'admin') return ROOM_FLOW[room.status]?.includes(next) ?? false;
+  if (!ROOM_FLOW[room.status]?.includes(next)) return false;
+  if (next === 'bloqueada') return isAtLeast(user, 'jefe');
+  if (room.status === 'bloqueada') return isAtLeast(user, 'jefe');
+  if (room.status === 'pendiente_inspeccion' && next === 'lista') {
+    return canSupervise(user, 'limpieza');
+  }
+  return inArea(user, 'limpieza') || inArea(user, 'recepcion') || isAtLeast(user, 'jefe');
+}
+
+export const canManageStays = (user: User | null) =>
+  isAtLeast(user, 'jefe') || user?.area === 'recepcion';
