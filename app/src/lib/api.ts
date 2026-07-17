@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
+import { getCached, setCached } from './cache';
 
 // Prioridad de resolución del backend:
 //   1. EXPO_PUBLIC_API_URL  — variable de entorno inyectada en el build.
@@ -35,6 +36,26 @@ export class ApiError extends Error {
 // cuando el servidor está conectado pero lento en responder.
 const REQUEST_TIMEOUT_MS = 60000;
 
+// Señal global de conectividad, derivada de si la última petición llegó a hablar con
+// el servidor (sin depender de NetInfo ni de ningún paquete nuevo). false en cuanto
+// una respuesta real llega, aunque sea un error de negocio (4xx/5xx): eso prueba que
+// hay red. true solo en el fallo de fetch/timeout (ApiError status 0).
+type OfflineListener = (offline: boolean) => void;
+const offlineListeners = new Set<OfflineListener>();
+let offline = false;
+function setOfflineState(next: boolean) {
+  if (next === offline) return;
+  offline = next;
+  offlineListeners.forEach((l) => l(offline));
+}
+export function subscribeOffline(listener: OfflineListener): () => void {
+  offlineListeners.add(listener);
+  listener(offline);
+  return () => {
+    offlineListeners.delete(listener);
+  };
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -53,10 +74,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // status 0 = fallo de red/timeout (nunca llegó a haber respuesta del servidor),
     // para que las pantallas lo distingan de un error de negocio (4xx/5xx).
     const timedOut = err instanceof Error && err.name === 'AbortError';
+    setOfflineState(true);
     throw new ApiError(0, timedOut ? 'El servidor tardó demasiado en responder' : 'No hay conexión con el servidor');
   } finally {
     clearTimeout(timeout);
   }
+  setOfflineState(false);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, data.error ?? `Error ${res.status}`);
   return data as T;
@@ -74,7 +97,24 @@ export function warmUp() {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
+  // Sin señal, sirve la última respuesta buena que se guardó para esta misma ruta
+  // (con sus mismos query params) en vez de dejar la pantalla en blanco. Los escritos
+  // (post/put/patch/del) no tienen caché ni cola: sin conexión fallan tal cual, con su
+  // ApiError de siempre — no hay forma segura de "reintentar sola" una escritura sin
+  // arriesgar duplicados o pisar un cambio de otra persona.
+  get: async <T>(path: string): Promise<T> => {
+    try {
+      const data = await request<T>('GET', path);
+      setCached(path, data);
+      return data;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) {
+        const cached = await getCached<T>(path);
+        if (cached !== null) return cached;
+      }
+      throw err;
+    }
+  },
   post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),

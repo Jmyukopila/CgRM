@@ -2,7 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import type { ReactNode } from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,9 +16,17 @@ import {
 } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { subscribeOffline } from '../lib/api';
+import { useT } from '../lib/i18n';
 import { DURATION, EASE, useFadeSlideIn, usePopIn, usePressScale, useShimmer } from '../lib/motion';
 import { fonts, radius, typeScale, type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
+
+function useOffline() {
+  const [offline, setOffline] = useState(false);
+  useEffect(() => subscribeOffline(setOffline), []);
+  return offline;
+}
 
 // Elevación única del sistema: solo la usan las tarjetas y el botón primario
 // (acción elevada); todo lo demás queda plano a propósito. Función de `colors`
@@ -231,12 +239,20 @@ export function Screen({
   slideFrom?: 'up' | 'down';
 }) {
   const { colors } = useTheme();
+  const { t } = useT();
   const fade = useFadeSlideIn(0, slideFrom);
+  const offline = useOffline();
   return (
     <SafeAreaView
       edges={['bottom', 'left', 'right']}
       style={[{ flex: 1, backgroundColor: colors.bg }, style]}
     >
+      {offline && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.warningSoft, paddingVertical: 6, paddingHorizontal: 14 }}>
+          <Ionicons name="cloud-offline-outline" size={14} color={colors.warning} />
+          <Text style={{ fontSize: 12, fontWeight: '700', color: colors.warning }}>{t('common.offlineBanner')}</Text>
+        </View>
+      )}
       <Animated.View style={[{ flex: 1 }, fade]}>{children}</Animated.View>
     </SafeAreaView>
   );
