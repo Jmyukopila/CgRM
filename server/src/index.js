@@ -1846,6 +1846,62 @@ app.get('/api/summary', h(async (req, res) => {
   res.json({ roomsByStatus, openTasks, openIncidents, pendingReview, tasksByType, lowStockCount });
 }));
 
+// --- Analítica (jefe+) -----------------------------------------------------------
+// Métricas derivadas de columnas que ya existen (created_at/done_at/rejected_at):
+// nada nuevo que registrar, solo agregarlo. seesAllAreas ya es cierto para cualquier
+// jefe (ve todas las áreas), así que aquí no hay filtro por área como en /api/summary.
+app.get('/api/analytics', requireRank('jefe'), h(async (_req, res) => {
+  await sweepExpiredTasks();
+
+  const completionTrend = await all(
+    `SELECT (done_at AT TIME ZONE $1)::date::text AS day, COUNT(*)::int AS completed
+     FROM tasks
+     WHERE status IN ('hecha','verificada') AND done_at >= now() - interval '14 days'
+     GROUP BY 1 ORDER BY 1`,
+    [HOTEL_TZ]
+  );
+
+  const avgCloseHoursByArea = await all(
+    `SELECT area,
+            ROUND(AVG(EXTRACT(EPOCH FROM (done_at - created_at)) / 3600)::numeric, 1)::float AS avg_hours,
+            COUNT(*)::int AS n
+     FROM tasks
+     WHERE status IN ('hecha','verificada') AND done_at >= now() - interval '30 days'
+     GROUP BY area
+     ORDER BY area`
+  );
+
+  // ever_rejected cuenta tareas que en algún momento tuvieron rejected_at (no se limpia
+  // al reenviarse), así que sirve como "cuánto de este trabajo tuvo que rehacerse".
+  const staffPerformance = await all(
+    `SELECT u.id, u.name, u.area,
+            COUNT(t.id)::int AS total,
+            COUNT(*) FILTER (WHERE t.status IN ('hecha','verificada'))::int AS completed,
+            COUNT(*) FILTER (WHERE t.rejected_at IS NOT NULL)::int AS ever_rejected,
+            ROUND(AVG(EXTRACT(EPOCH FROM (t.done_at - t.created_at)) / 3600)
+              FILTER (WHERE t.status IN ('hecha','verificada'))::numeric, 1)::float AS avg_hours
+     FROM users u
+     JOIN tasks t ON t.assignee_id = u.id AND t.created_at >= now() - interval '30 days'
+     WHERE u.role = 'empleado' AND u.active
+     GROUP BY u.id, u.name, u.area
+     ORDER BY completed DESC, total DESC`
+  );
+
+  // A punto de incumplir (no vencida todavía, pero su plazo cae en las próximas 6h):
+  // visibilidad ANTES del incumplimiento, que es lo único que sweepExpiredTasks da hoy.
+  const atRisk = await all(
+    `SELECT t.id, t.title, t.area, t.priority, t.due_at, r.name AS room_name
+     FROM tasks t JOIN rooms r ON r.id = t.room_id
+     WHERE t.status = ANY($1) AND t.due_at IS NOT NULL
+       AND t.due_at BETWEEN now() AND now() + interval '6 hours'
+     ORDER BY t.due_at ASC
+     LIMIT 20`,
+    [OPEN_TASK_STATUSES]
+  );
+
+  res.json({ completionTrend, avgCloseHoursByArea, staffPerformance, atRisk });
+}));
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // Cualquier error de la base o excepción no controlada acaba aquí.

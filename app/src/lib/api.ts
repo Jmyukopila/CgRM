@@ -306,6 +306,28 @@ export interface Summary {
   lowStockCount: number;
 }
 
+export interface Analytics {
+  completionTrend: { day: string; completed: number }[];
+  avgCloseHoursByArea: { area: string; avg_hours: number | null; n: number }[];
+  staffPerformance: {
+    id: number;
+    name: string;
+    area: string;
+    total: number;
+    completed: number;
+    ever_rejected: number;
+    avg_hours: number | null;
+  }[];
+  atRisk: {
+    id: number;
+    title: string;
+    area: string;
+    priority: string;
+    due_at: string;
+    room_name: string;
+  }[];
+}
+
 export interface LostItem {
   id: number;
   room_id: number | null;
