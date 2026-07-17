@@ -121,9 +121,12 @@ async function runTaskSchedules() {
   for (const s of due) {
     const room = await getRoom(s.room_id);
     if (!room) continue;
+    // Reparto equilibrado en cada pasada, no el que tocaba al crear la programación:
+    // quien tenga menos carga HOY se lleva la instancia de hoy.
+    const assigneeId = s.auto_assign ? await pickLeastLoadedAssignee(s.area) : s.assignee_id;
     const taskId = await createTask({
       room, area: s.area, type: s.type, title: s.title, description: s.description,
-      priority: s.priority, assignee_id: s.assignee_id, createdBy: s.created_by,
+      priority: s.priority, assignee_id: assigneeId, createdBy: s.created_by,
       scheduleId: s.id, scheduledSlot: s.slot_at,
       dueAt: s.freq === 'una_vez' && s.date_to ? { endOfLocalDay: s.date_to } : null,
     });
@@ -691,9 +694,27 @@ async function createTask({
   return taskId;
 }
 
+// Reparto equilibrado: entre los empleados activos del área, el que menos carga abierta
+// tenga ahora mismo (tareas en OPEN_TASK_STATUSES). Empate se rompe por id, no al azar,
+// para que el resultado sea reproducible. Si el área no tiene empleados activos, null
+// (la tarea queda sin asignar y cae al reparto manual de siempre).
+async function pickLeastLoadedAssignee(area) {
+  const row = await one(
+    `SELECT u.id FROM users u
+     LEFT JOIN tasks t ON t.assignee_id = u.id AND t.status = ANY($2)
+     WHERE u.area = $1 AND u.role = 'empleado' AND u.active
+     GROUP BY u.id
+     ORDER BY COUNT(t.id) ASC, u.id ASC
+     LIMIT 1`,
+    [area, OPEN_TASK_STATUSES]
+  );
+  return row?.id ?? null;
+}
+
 // Validaciones comunes a crear una tarea directa (POST /api/tasks) o una programación
 // (POST /api/task-schedules): tipo, prioridad, área supervisada, habitaciones válidas
-// y asignado dentro del área.
+// y asignado dentro del área. assignee_id: 'auto' pide reparto equilibrado en vez de
+// una persona fija (ver autoAssign en el resultado).
 async function validateTaskPayload(user, body) {
   const { room_id, room_ids, type, area, priority = 'media', assignee_id = null } = body || {};
   if (!TASK_TYPES.includes(type)) return { error: 'Tipo de tarea no válido', code: 400 };
@@ -706,6 +727,9 @@ async function validateTaskPayload(user, body) {
   const rooms = await Promise.all(ids.map((id) => (toId(id) ? getRoom(toId(id)) : null)));
   if (rooms.length === 0 || rooms.some((r) => !r)) return { error: 'Habitación no válida', code: 400 };
 
+  if (assignee_id === 'auto') {
+    return { taskArea, rooms, assigneeId: null, autoAssign: true, priority };
+  }
   let assigneeId = null;
   if (assignee_id) {
     const assignee = await one('SELECT * FROM users WHERE id = $1 AND active', [toId(assignee_id)]);
@@ -715,7 +739,7 @@ async function validateTaskPayload(user, body) {
     }
     assigneeId = assignee.id;
   }
-  return { taskArea, rooms, assigneeId, priority };
+  return { taskArea, rooms, assigneeId, autoAssign: false, priority };
 }
 
 // Acepta room_id (una habitación) o room_ids (asignación masiva a varias a la vez).
@@ -735,10 +759,13 @@ app.post('/api/tasks', requireRank('jefe'), h(async (req, res) => {
   const taskIds = [];
   for (const room of v.rooms) {
     if (items && save_checklist) await setRoomChecklist(room.id, type, items);
+    // Recalculado en cada vuelta (no una vez para todo el lote): así una tanda de 8
+    // habitaciones se reparte entre el equipo en vez de caer entera sobre el mismo.
+    const assigneeId = v.autoAssign ? await pickLeastLoadedAssignee(v.taskArea) : v.assigneeId;
     taskIds.push(
       await createTask({
         room, area: v.taskArea, type, title, description, priority: v.priority,
-        assignee_id: v.assigneeId, createdBy: req.user.id, items,
+        assignee_id: assigneeId, createdBy: req.user.id, items,
       })
     );
   }
@@ -852,11 +879,11 @@ app.post('/api/task-schedules', requireRank('jefe'), h(async (req, res) => {
     if (items) await setRoomChecklist(room.id, type, items);
     const row = await one(
       `INSERT INTO task_schedules
-         (room_id, area, type, title, description, priority, assignee_id, freq, run_hours, date_from, date_to, created_by, week_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, (now() AT TIME ZONE $13)::date), $11, $12, $14)
+         (room_id, area, type, title, description, priority, assignee_id, auto_assign, freq, run_hours, date_from, date_to, created_by, week_days)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, (now() AT TIME ZONE $14)::date), $12, $13, $15)
        RETURNING id`,
       [
-        room.id, v.taskArea, type, title, description, v.priority, v.assigneeId,
+        room.id, v.taskArea, type, title, description, v.priority, v.assigneeId, v.autoAssign,
         freq, uniqueHours, dateFrom, dateTo, req.user.id, HOTEL_TZ, weekDays,
       ]
     );

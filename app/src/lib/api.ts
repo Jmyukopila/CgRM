@@ -343,6 +343,9 @@ export interface TaskSchedule {
   priority: string;
   assignee_id: number | null;
   assignee_name: string | null;
+  // Si true, assignee_id/assignee_name quedan en null a propósito: cada instancia se
+  // reparte sola al materializarse, según quién tenga menos carga ese día.
+  auto_assign: boolean;
   freq: ScheduleFreq;
   run_hours: number[];
   date_from: string;

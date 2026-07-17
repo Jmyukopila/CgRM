@@ -94,7 +94,7 @@ export default function Programadas() {
               </Text>
             )}
             {sch.date_to && <Text style={s.meta}>{t('schedules.until', { date: sch.date_to })}</Text>}
-            <Text style={s.meta}>{sch.assignee_name ?? t('common.unassigned')}</Text>
+            <Text style={s.meta}>{sch.auto_assign ? t('schedules.autoAssign') : sch.assignee_name ?? t('common.unassigned')}</Text>
             <View style={s.actions}>
               <Button label={t('schedules.cancel')} kind="danger" onPress={() => cancel(sch)} />
             </View>

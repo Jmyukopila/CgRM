@@ -51,7 +51,7 @@ export default function NuevaTareaMasiva() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [prio, setPrio] = useState('media');
-  const [assignee, setAssignee] = useState<number | null>(null);
+  const [assignee, setAssignee] = useState<number | 'auto' | null>(null);
 
   const [items, setItems] = useState<ChecklistDraft[]>([emptyChecklistItem()]);
 
@@ -306,6 +306,13 @@ export default function NuevaTareaMasiva() {
             active={assignee === null}
             onPress={() => setAssignee(null)}
           />
+          {assignableStaff.length > 0 && (
+            <Chip
+              label={t('bulk.autoAssign')}
+              active={assignee === 'auto'}
+              onPress={() => setAssignee('auto')}
+            />
+          )}
           {assignableStaff.map((m) => (
             <Chip
               key={m.id}

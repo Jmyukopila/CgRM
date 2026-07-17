@@ -200,6 +200,10 @@ CREATE TABLE IF NOT EXISTS task_schedules (
   description text NOT NULL DEFAULT '',
   priority text NOT NULL DEFAULT 'media' CHECK (priority IN ('baja','media','alta','urgente')),
   assignee_id integer REFERENCES users(id),
+  -- Si auto_assign, cada instancia se reparte al empleado del área con menos carga
+  -- abierta EN EL MOMENTO de materializarse (no al crear la programación): assignee_id
+  -- queda en NULL y runTaskSchedules() lo resuelve en cada pasada.
+  auto_assign boolean NOT NULL DEFAULT false,
   freq text NOT NULL CHECK (freq IN ('una_vez','diaria','semanal','mensual')),
   run_hours integer[] NOT NULL DEFAULT '{8}',
   date_from date NOT NULL DEFAULT (now() AT TIME ZONE 'America/Bogota')::date,
@@ -209,6 +213,9 @@ CREATE TABLE IF NOT EXISTS task_schedules (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_task_schedules_active ON task_schedules(room_id) WHERE active;
+-- Migración para bases ya existentes: CREATE TABLE IF NOT EXISTS de arriba no toca
+-- una tabla que ya existe, así que la columna nueva necesita su propio ALTER idempotente.
+ALTER TABLE task_schedules ADD COLUMN IF NOT EXISTS auto_assign boolean NOT NULL DEFAULT false;
 
 -- Traza de qué programación y qué franja horaria exacta generó una instancia: es la
 -- base de la idempotencia del generador (un slot no se materializa dos veces).

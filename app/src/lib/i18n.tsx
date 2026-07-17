@@ -407,6 +407,7 @@ const dict = {
     'bulk.where': 'Dónde se hace',
     'bulk.what': 'Qué hay que hacer',
     'bulk.who': 'Quién lo hace',
+    'bulk.autoAssign': 'Auto-asignar (equilibrado)',
     'bulk.rooms': 'Habitaciones',
     'bulk.zones': 'Zonas comunes',
     'bulk.allRooms': 'Todas las habitaciones',
@@ -427,6 +428,7 @@ const dict = {
 
     // Programaciones (líder+)
     'schedules.title': 'Programadas',
+    'schedules.autoAssign': 'Auto-asignado (equilibrado)',
     'schedules.empty': 'No hay tareas programadas.',
     'schedules.cancel': 'Cancelar',
     'schedules.cancelConfirmTitle': 'Cancelar programación',
@@ -800,6 +802,7 @@ const dict = {
     'bulk.where': 'Where',
     'bulk.what': 'What to do',
     'bulk.who': 'Who does it',
+    'bulk.autoAssign': 'Auto-assign (balanced)',
     'bulk.rooms': 'Rooms',
     'bulk.zones': 'Common areas',
     'bulk.allRooms': 'All rooms',
@@ -819,6 +822,7 @@ const dict = {
     'bulk.freq.una_vez': 'One-time',
 
     'schedules.title': 'Scheduled',
+    'schedules.autoAssign': 'Auto-assigned (balanced)',
     'schedules.empty': 'No scheduled tasks.',
     'schedules.cancel': 'Cancel',
     'schedules.cancelConfirmTitle': 'Cancel schedule',
