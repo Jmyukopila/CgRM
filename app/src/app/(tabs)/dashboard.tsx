@@ -123,6 +123,7 @@ function TaskRow({ task }: { task: Task }) {
 export default function Dashboard() {
   const { user } = useAuth();
   const { t } = useT();
+  const { colors } = useTheme();
   const s = useThemedStyles(makeStyles);
   const isLead = isAtLeast(user, 'jefe');
 
@@ -212,6 +213,14 @@ export default function Dashboard() {
 
         {isLead ? (
           <>
+            {!!summary?.lowStockCount && (
+              <AnimatedPressable onPress={() => router.push('/inventario')} style={s.lowStockBanner}>
+                <Ionicons name="alert-circle" size={18} color={colors.danger} />
+                <Text style={s.lowStockText}>
+                  {summary.lowStockCount} {t('dashboard.lowStock')}
+                </Text>
+              </AnimatedPressable>
+            )}
             <Text style={s.sectionTitle}>{t('dashboard.roomsTitle')}</Text>
             {rooms.length === 0 ? (
               <Empty text={t('dashboard.emptyRooms')} />
@@ -243,6 +252,17 @@ function makeStyles(colors: Colors) {
     screen: { flex: 1 } as ViewStyle,
     subtitle: { ...typeScale.caption, color: colors.inkSoft, marginBottom: 12 } as TextStyle,
     sectionTitle: { ...typeScale.label, color: colors.inkSoft, marginTop: 20, marginBottom: 8 } as TextStyle,
+    lowStockBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: colors.dangerSoft,
+      borderRadius: radius.md,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginTop: 12,
+    } as ViewStyle,
+    lowStockText: { ...typeScale.bodyStrong, color: colors.danger } as TextStyle,
     row: {
       flexDirection: 'row',
       alignItems: 'center',

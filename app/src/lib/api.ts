@@ -302,6 +302,8 @@ export interface Summary {
   pendingReview: number;
   // Por tipo de tarea, para los anillos del panel de control.
   tasksByType: Record<string, { terminado: number; en_progreso: number; no_iniciado: number }>;
+  // Artículos de inventario bajo su mínimo (solo se calcula para jefe/admin).
+  lowStockCount: number;
 }
 
 export interface LostItem {

@@ -1516,7 +1516,7 @@ app.patch('/api/inventory/:id', requireRank('jefe'), h(async (req, res) => {
 // Reponer (entrada de stock) sí es cosa de dirección.
 app.post('/api/inventory/:id/movements', h(async (req, res) => {
   const id = toId(req.params.id);
-  const item = id && (await one('SELECT id FROM inventory_items WHERE id = $1', [id]));
+  const item = id && (await one('SELECT * FROM inventory_items WHERE id = $1', [id]));
   if (!item) return res.status(404).json({ error: 'Artículo no encontrado' });
   const { delta, reason = '' } = req.body || {};
   const d = Number(delta);
@@ -1535,6 +1535,19 @@ app.post('/api/inventory/:id/movements', h(async (req, res) => {
     'INSERT INTO inventory_movements (item_id, delta, reason, user_id) VALUES ($1, $2, $3, $4)',
     [item.id, d, String(reason), req.user.id]
   );
+
+  // Aviso a dirección solo al cruzar el umbral (de "bien de stock" a "bajo mínimo"),
+  // no en cada consumo posterior: evita saturar de notificaciones repetidas.
+  if (item.qty >= item.min_qty && updated.qty < updated.min_qty) {
+    const leads = (await all("SELECT id FROM users WHERE role IN ('jefe','admin')")).map((r) => r.id);
+    await notifyUsers(leads, {
+      type: 'low_stock',
+      title: `Stock bajo: ${updated.name}`,
+      body: `Quedan ${updated.qty} ${updated.unit} (mínimo ${updated.min_qty}).`,
+      ref: { type: 'inventory', id: updated.id },
+    });
+  }
+
   res.status(201).json(updated);
 }));
 
@@ -1797,7 +1810,13 @@ app.get('/api/summary', h(async (req, res) => {
   )) {
     tasksByType[row.type] = { terminado: row.terminado, en_progreso: row.en_progreso, no_iniciado: row.no_iniciado };
   }
-  res.json({ roomsByStatus, openTasks, openIncidents, pendingReview, tasksByType });
+  // Solo dirección gestiona inventario, así que solo a dirección le sumamos este dato.
+  let lowStockCount = 0;
+  if (canManageOps(req.user)) {
+    ({ n: lowStockCount } = await one('SELECT COUNT(*)::int AS n FROM inventory_items WHERE qty < min_qty'));
+  }
+
+  res.json({ roomsByStatus, openTasks, openIncidents, pendingReview, tasksByType, lowStockCount });
 }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));

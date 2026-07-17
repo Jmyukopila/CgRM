@@ -9,17 +9,22 @@ import { useEffect } from 'react';
 import { Platform } from 'react-native';
 import { api } from './api';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 export async function registerPushToken() {
   try {
+    // En web no hay push de Expo: sin esta guarda se dispara el diálogo de permiso
+    // del navegador, que en la PWA instalada en Android es modal y congela la app.
+    if (Platform.OS === 'web') return;
     if (!Device.isDevice) return; // los simuladores no reciben push
 
     if (Platform.OS === 'android') {
@@ -55,6 +60,7 @@ function routeFor(data: Record<string, unknown>): string | null {
   if (refType === 'task') return `/task/${refId}`;
   if (refType === 'incident') return `/incident/${refId}`;
   if (refType === 'room') return `/room/${refId}`;
+  if (refType === 'inventory') return '/inventario';
   return null;
 }
 
