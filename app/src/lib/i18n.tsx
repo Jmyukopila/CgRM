@@ -1,7 +1,9 @@
 // Sistema de idioma (ES/EN) con persistencia en AsyncStorage.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import type { Ionicons } from '@expo/vector-icons';
 import { useTheme } from './theme-context';
+import { PRIORITY_ICON, TASK_TYPE_ICON, taskTypeColor } from './theme';
 
 export type Lang = 'es' | 'en';
 const STORAGE_KEY = 'cgrm.lang';
@@ -128,6 +130,8 @@ const dict = {
     'room.emptyIncidents': 'Sin incidencias en esta habitación.',
     'room.open': 'Abierta',
     'room.resolved': 'Resuelta',
+    'room.taskType': 'Tipo de trabajo',
+    'room.taskPriority': 'Prioridad',
     'room.taskName': 'Nombre de la tarea',
     'room.taskNamePlaceholder': 'Ej.: repasar cristales (opcional)',
     'room.taskDescriptionPlaceholder': 'Descripción (opcional)',
@@ -417,6 +421,8 @@ const dict = {
     'bulk.summary': 'Resumen',
     'bulk.where': 'Dónde se hace',
     'bulk.what': 'Qué hay que hacer',
+    'bulk.type': 'Tipo de tarea',
+    'bulk.priority': 'Prioridad',
     'bulk.who': 'Quién lo hace',
     'bulk.autoAssign': 'Auto-asignar (equilibrado)',
     'bulk.rooms': 'Habitaciones',
@@ -553,6 +559,8 @@ const dict = {
     'room.emptyIncidents': 'No incidents for this room.',
     'room.open': 'Open',
     'room.resolved': 'Resolved',
+    'room.taskType': 'Type of work',
+    'room.taskPriority': 'Priority',
     'room.taskName': 'Task name',
     'room.taskNamePlaceholder': 'E.g.: wipe down windows (optional)',
     'room.taskDescriptionPlaceholder': 'Description (optional)',
@@ -823,6 +831,8 @@ const dict = {
     'bulk.summary': 'Summary',
     'bulk.where': 'Where',
     'bulk.what': 'What to do',
+    'bulk.type': 'Task type',
+    'bulk.priority': 'Priority',
     'bulk.who': 'Who does it',
     'bulk.autoAssign': 'Auto-assign (balanced)',
     'bulk.rooms': 'Rooms',
@@ -922,11 +932,14 @@ export function useTaskStatusMeta(): Record<string, { label: string; color: stri
   );
 }
 
-export function usePriorityMeta(): Record<string, { label: string; color: string }> {
+export function usePriorityMeta(): Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> {
   const { t } = useT();
   const { statusMaps } = useTheme();
   return Object.fromEntries(
-    Object.entries(statusMaps.priorityColor).map(([k, v]) => [k, { ...v, label: t(`priority.${k}` as TKey) }])
+    Object.entries(statusMaps.priorityColor).map(([k, v]) => [
+      k,
+      { ...v, label: t(`priority.${k}` as TKey), icon: PRIORITY_ICON[k] ?? 'ellipse-outline' },
+    ])
   );
 }
 
@@ -950,6 +963,18 @@ export function useTaskTypeLabels(): Record<string, string> {
   return useLabels('taskType', [
     'limpieza', 'mantenimiento', 'inspeccion', 'recepcion', 'cocina', 'lavanderia', 'general',
   ]);
+}
+
+// Meta (label + color + icono) del selector de tipo/área en la creación de tareas.
+export function useTaskTypeMeta(): Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> {
+  const labels = useTaskTypeLabels();
+  const { colors } = useTheme();
+  return Object.fromEntries(
+    Object.entries(labels).map(([k, label]) => [
+      k,
+      { label, color: taskTypeColor(colors, k), icon: TASK_TYPE_ICON[k] ?? 'apps-outline' },
+    ])
+  );
 }
 
 export function useAreaLabels(): Record<string, string> {

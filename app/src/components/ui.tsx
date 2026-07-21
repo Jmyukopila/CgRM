@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Platform,
   Pressable,
   StyleProp,
@@ -316,9 +317,13 @@ export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
   icon?: keyof typeof Ionicons.glyphMap;
+  color?: string;
 }
 
-// Control animado de 2-3 opciones (tema, idioma): el thumb se desliza a la opción activa.
+// Control animado de 2-3 opciones (tema, idioma, prioridad, programación): el thumb se
+// desliza a la opción activa. Con `color` por opción (p.ej. prioridad), el thumb adopta
+// ese tono en vez del `ink` neutro por defecto — la posición se anima, el color cambia
+// al vuelo (un fundido de color no aporta aquí y complica el shared value).
 export function SegmentedControl<T extends string>({
   options,
   value,
@@ -341,10 +346,12 @@ export function SegmentedControl<T extends string>({
     left: `${(progress.value / options.length) * 100}%`,
   }));
 
+  const activeColor = options[index]?.color ?? colors.ink;
+
   return (
     <View style={s.segmentedTrack}>
       <Animated.View
-        style={[s.segmentedThumb, { width: `${100 / options.length}%`, backgroundColor: colors.ink }, thumbStyle]}
+        style={[s.segmentedThumb, { width: `${100 / options.length}%`, backgroundColor: activeColor }, thumbStyle]}
       />
       {options.map((opt) => {
         const active = opt.value === value;
@@ -364,6 +371,88 @@ export function SegmentedControl<T extends string>({
           </Pressable>
         );
       })}
+    </View>
+  );
+}
+
+export interface IconOption<T extends string> {
+  value: T;
+  label: string;
+  color: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}
+
+// Botón emergente para elegir entre varias opciones con icono y color propios (tipo de
+// tarea / área): cerrado se ve como una sola píldora con el icono y el color de la opción
+// activa; al tocarla despliega el resto en una rejilla. Pensado para listas de 4-7
+// opciones, donde un slider de segmentos quedaría apretado.
+export function IconPickerField<T extends string>({
+  subtitle,
+  value,
+  options,
+  onChange,
+}: {
+  subtitle: string;
+  value: T;
+  options: IconOption<T>[];
+  onChange: (v: T) => void;
+}) {
+  const { colors } = useTheme();
+  const s = useThemedStyles(makeSharedStyles);
+  const [open, setOpen] = useState(false);
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  return (
+    <View>
+      <Text style={s.pickerSubtitle}>{subtitle}</Text>
+      <Pressable
+        onPress={() => {
+          Haptics.selectionAsync();
+          setOpen(true);
+        }}
+        style={[s.pickerButton, { borderColor: current?.color ?? colors.hairline }]}
+      >
+        <View style={[s.pickerIconWrap, { backgroundColor: current?.color ?? colors.inkSoft }]}>
+          <Ionicons name={current?.icon ?? 'apps-outline'} size={16} color={colors.onAccent} />
+        </View>
+        <Text style={s.pickerButtonText}>{current?.label ?? ''}</Text>
+        <Ionicons name="chevron-down" size={16} color={colors.inkSoft} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={s.pickerBackdrop} onPress={() => setOpen(false)}>
+          <Pressable style={s.pickerPanel} onPress={() => {}}>
+            <Text style={s.pickerPanelTitle}>{subtitle}</Text>
+            <View style={s.pickerGrid}>
+              {options.map((opt) => {
+                const active = opt.value === value;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      onChange(opt.value);
+                      setOpen(false);
+                    }}
+                    style={[
+                      s.pickerTile,
+                      { borderColor: active ? opt.color : colors.hairline },
+                      active && { backgroundColor: `${opt.color}1A` },
+                    ]}
+                  >
+                    <View style={[s.pickerIconWrap, { backgroundColor: opt.color }]}>
+                      <Ionicons name={opt.icon} size={18} color={colors.onAccent} />
+                    </View>
+                    <Text style={s.pickerTileText} numberOfLines={1}>
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -459,5 +548,65 @@ function makeSharedStyles(colors: Colors) {
       paddingVertical: 8,
     } as ViewStyle,
     segmentedText: { ...typeScale.caption, color: colors.ink } as TextStyle,
+    pickerSubtitle: {
+      ...typeScale.label,
+      color: colors.inkSoft,
+      marginBottom: 6,
+    } as TextStyle,
+    pickerButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      alignSelf: 'flex-start',
+      borderWidth: 1.5,
+      borderRadius: radius.pill,
+      paddingVertical: 6,
+      paddingRight: 14,
+      paddingLeft: 6,
+      backgroundColor: colors.surface,
+    } as ViewStyle,
+    pickerButtonText: { ...typeScale.bodyStrong, color: colors.ink } as TextStyle,
+    pickerIconWrap: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
+    pickerBackdrop: {
+      flex: 1,
+      backgroundColor: colors.overlay,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 24,
+    } as ViewStyle,
+    pickerPanel: {
+      width: '100%',
+      maxWidth: 380,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: 18,
+      ...cardShadow(colors),
+    } as ViewStyle,
+    pickerPanelTitle: {
+      ...typeScale.heading,
+      color: colors.ink,
+      marginBottom: 14,
+    } as TextStyle,
+    pickerGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 10,
+    } as ViewStyle,
+    pickerTile: {
+      width: '30%',
+      alignItems: 'center',
+      gap: 6,
+      paddingVertical: 12,
+      paddingHorizontal: 4,
+      borderWidth: 1.5,
+      borderRadius: radius.md,
+    } as ViewStyle,
+    pickerTileText: { ...typeScale.caption, color: colors.ink, textAlign: 'center' } as TextStyle,
   };
 }

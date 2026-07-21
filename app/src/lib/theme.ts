@@ -5,6 +5,7 @@
 //
 // lightColors/darkColors comparten las mismas claves: cualquier pantalla que
 // consuma `useTheme().colors` funciona igual en los dos modos sin lógica propia.
+import type { Ionicons } from '@expo/vector-icons';
 
 export const lightColors = {
   bg: '#FAF6F0',
@@ -190,3 +191,44 @@ export function roleColor(colors: Colors, role: string): string {
       return colors.inkSoft;
   }
 }
+
+// Color de identidad por tipo de tarea (selector de área en la creación de tareas):
+// reutiliza los mismos tonos semánticos de arriba, uno por área, para no inventar
+// paleta nueva — solo les da un segundo uso como identidad visual del tipo.
+export function taskTypeColor(colors: Colors, type: string): string {
+  switch (type) {
+    case 'limpieza':
+      return colors.success;
+    case 'inspeccion':
+      return colors.info;
+    case 'mantenimiento':
+      return colors.warning;
+    case 'recepcion':
+      return colors.accent;
+    case 'cocina':
+      return colors.danger;
+    case 'lavanderia':
+      return colors.purple;
+    default:
+      return colors.inkSoft; // 'general' / administración
+  }
+}
+
+// Icono por tipo de tarea, mismo selector de área. Sin dependencia de tema (no es color).
+export const TASK_TYPE_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  limpieza: 'sparkles-outline',
+  inspeccion: 'search-outline',
+  mantenimiento: 'construct-outline',
+  recepcion: 'business-outline',
+  cocina: 'restaurant-outline',
+  lavanderia: 'shirt-outline',
+  general: 'apps-outline',
+};
+
+// Icono por prioridad, para el slider de prioridad en la creación de tareas.
+export const PRIORITY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  baja: 'arrow-down-circle-outline',
+  media: 'remove-circle-outline',
+  alta: 'arrow-up-circle-outline',
+  urgente: 'alert-circle',
+};

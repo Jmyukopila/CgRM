@@ -21,9 +21,11 @@ import {
   confirmAction,
   Empty,
   ErrorState,
+  IconPickerField,
   Pill,
   Screen,
   SectionTitle,
+  SegmentedControl,
   Skeleton,
   notify,
 } from '../../components/ui';
@@ -49,6 +51,7 @@ import {
   useT,
   useTaskStatusMeta,
   useTaskTypeLabels,
+  useTaskTypeMeta,
   type TKey,
 } from '../../lib/i18n';
 import { useFadeSlideIn, useStaggerDelay } from '../../lib/motion';
@@ -72,36 +75,13 @@ type Frequency = (typeof FREQUENCIES)[number];
 const RUN_HOURS = ['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'];
 type ScheduleMode = 'unica' | 'recurrente' | 'programada';
 const WEEK_DAYS = [1, 2, 3, 4, 5, 6, 0] as const; // empieza en lunes, más natural para el equipo
+// Icono por modo de programación, para el slider de "estado" de la nueva tarea.
+const SCHEDULE_MODE_ICON: Record<ScheduleMode, 'flash-outline' | 'repeat-outline' | 'calendar-outline'> = {
+  unica: 'flash-outline',
+  recurrente: 'repeat-outline',
+  programada: 'calendar-outline',
+};
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function Selector<T extends string>({
-  options,
-  value,
-  onChange,
-  labels,
-}: {
-  options: T[];
-  value: T;
-  onChange: (v: T) => void;
-  labels: Record<string, string>;
-}) {
-  const s = useThemedStyles(makeStyles);
-  return (
-    <View style={s.selector}>
-      {options.map((opt) => (
-        <Pressable
-          key={opt}
-          onPress={() => onChange(opt)}
-          style={[s.selectorChip, value === opt && s.selectorChipActive]}
-        >
-          <Text style={[s.selectorText, value === opt && s.selectorTextActive]}>
-            {labels[opt] ?? opt}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-}
 
 function TaskRow({ task, index, stLabel, stColor, typeLabel }: { task: Task; index: number; stLabel: string; stColor: string; typeLabel: string }) {
   const { t } = useT();
@@ -164,6 +144,7 @@ export default function RoomDetail() {
   const roomType = useRoomTypeLabels();
   const taskStatus = useTaskStatusMeta();
   const taskType = useTaskTypeLabels();
+  const taskTypeMeta = useTaskTypeMeta();
   const incidentStatus = useIncidentStatusMeta();
   // Crear trabajo es potestad del mando; el estado de la habitación ya no se fuerza
   // a mano (lo deriva el servidor del flujo de tareas, ver server/src/index.js).
@@ -363,20 +344,10 @@ export default function RoomDetail() {
     }
   };
 
-  // La checklist del formulario parte siempre de la checklist actual del sitio para el
-  // tipo elegido (algo real que retocar), o de un punto en blanco si el sitio no tiene.
-  const seedTaskItems = (type: string) => {
-    const seed = checklist[type as keyof RoomChecklist];
-    setTaskItems(
-      seed && seed.length > 0
-        ? seed.map((i) => ({
-            text: i.text,
-            requires_evidence: i.requires_evidence,
-            evidence_kind: i.evidence_kind,
-            min_evidence: i.min_evidence,
-          }))
-        : [emptyChecklistItem()]
-    );
+  // La checklist del formulario siempre empieza en blanco: quien crea la tarea decide
+  // qué puntos lleva, sin heredar la checklist ya guardada del sitio.
+  const seedTaskItems = (_type: string) => {
+    setTaskItems([emptyChecklistItem()]);
   };
 
   const startEditChecklist = (taskType: string) => {
@@ -662,22 +633,29 @@ export default function RoomDetail() {
               contentContainerStyle={{ paddingBottom: 8, gap: 10 }}
               keyboardShouldPersistTaps="handled"
             >
-              <Selector
-                options={creatableTypes}
+              <IconPickerField
+                subtitle={t('room.taskType')}
                 value={newType}
+                options={creatableTypes.map((k) => ({ value: k, ...taskTypeMeta[k] }))}
                 onChange={(v) => {
                   setNewType(v);
                   setNewAssignee(null);
                   seedTaskItems(v);
                 }}
-                labels={taskType}
               />
-              <Selector
-                options={['baja', 'media', 'alta', 'urgente']}
-                value={newPriority}
-                onChange={setNewPriority}
-                labels={Object.fromEntries(Object.entries(priority).map(([k, v]) => [k, v.label]))}
-              />
+              <View>
+                <Text style={s.selectorSubtitle}>{t('room.taskPriority')}</Text>
+                <SegmentedControl
+                  options={(['baja', 'media', 'alta', 'urgente'] as const).map((k) => ({
+                    value: k,
+                    label: priority[k].label,
+                    icon: priority[k].icon,
+                    color: priority[k].color,
+                  }))}
+                  value={newPriority}
+                  onChange={setNewPriority}
+                />
+              </View>
               <View style={s.selector}>
                 <Pressable
                   onPress={() => setNewAssignee(null)}
@@ -721,19 +699,15 @@ export default function RoomDetail() {
               <ChecklistEditor items={taskItems} onChange={setTaskItems} />
 
               <SectionTitle>{t('room.schedule')}</SectionTitle>
-              <View style={s.selector}>
-                {(['unica', 'recurrente', 'programada'] as ScheduleMode[]).map((mode) => (
-                  <Pressable
-                    key={mode}
-                    onPress={() => setScheduleMode(mode)}
-                    style={[s.selectorChip, scheduleMode === mode && s.selectorChipActive]}
-                  >
-                    <Text style={[s.selectorText, scheduleMode === mode && s.selectorTextActive]}>
-                      {scheduleLabels[mode]}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
+              <SegmentedControl
+                options={(['unica', 'recurrente', 'programada'] as ScheduleMode[]).map((mode) => ({
+                  value: mode,
+                  label: scheduleLabels[mode],
+                  icon: SCHEDULE_MODE_ICON[mode],
+                }))}
+                value={scheduleMode}
+                onChange={setScheduleMode}
+              />
 
               {scheduleMode === 'recurrente' && (
                 <>
@@ -888,6 +862,7 @@ function makeStyles(colors: Colors) {
       ...cardShadow(colors),
     } as ViewStyle,
     selector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
+    selectorSubtitle: { ...typeScale.label, color: colors.inkSoft, marginBottom: 6 } as TextStyle,
     selectorChip: {
       borderWidth: 1,
       borderColor: colors.hairlineStrong,

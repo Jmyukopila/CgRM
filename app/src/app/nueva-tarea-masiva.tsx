@@ -17,12 +17,21 @@ import {
   ViewStyle,
 } from 'react-native';
 import { ChecklistEditor, emptyChecklistItem } from '../components/checklist-editor';
-import { Button, Chip, ErrorState, SectionTitle, Screen, notify } from '../components/ui';
-import { api, type ChecklistDraft, type Room, type RoomChecklist, type User } from '../lib/api';
+import {
+  Button,
+  Chip,
+  ErrorState,
+  IconPickerField,
+  SectionTitle,
+  Screen,
+  SegmentedControl,
+  notify,
+} from '../components/ui';
+import { api, type ChecklistDraft, type Room, type User } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { usePriorityMeta, useT, useTaskTypeLabels, type TKey } from '../lib/i18n';
+import { usePriorityMeta, useT, useTaskTypeMeta, type TKey } from '../lib/i18n';
 import { AREA_OF_TYPE, canSupervise, inArea } from '../lib/permissions';
-import { type Colors } from '../lib/theme';
+import { typeScale, type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
 import { groupByFloor } from '../lib/utils';
 
@@ -39,7 +48,7 @@ export default function NuevaTareaMasiva() {
   const { colors } = useTheme();
   const s = useThemedStyles(makeStyles);
   const priority = usePriorityMeta();
-  const taskType = useTaskTypeLabels();
+  const taskType = useTaskTypeMeta();
 
   const [rooms, setRooms] = useState<Room[]>([]);
   const [staff, setStaff] = useState<User[]>([]);
@@ -134,30 +143,9 @@ export default function NuevaTareaMasiva() {
     });
   };
 
-  // La checklist siempre parte de la que ya tiene el primer sitio seleccionado para este
-  // tipo de trabajo: se edita algo real en vez de una hoja en blanco. Si no hay nada de lo
-  // que partir (o nada seleccionado todavía), un punto vacío.
-  const seedItemsFor = async (forType: string, roomIds: Set<number>) => {
-    const first = [...roomIds][0];
-    if (first) {
-      try {
-        const checklist = await api.get<RoomChecklist>(`/api/rooms/${first}/checklist`);
-        const seed = checklist[forType as keyof RoomChecklist];
-        if (seed && seed.length > 0) {
-          setItems(
-            seed.map((i) => ({
-              text: i.text,
-              requires_evidence: i.requires_evidence,
-              evidence_kind: i.evidence_kind,
-              min_evidence: i.min_evidence,
-            }))
-          );
-          return;
-        }
-      } catch {
-        // Sin conexión o sitio sin checklist: se empieza en blanco, no es un error.
-      }
-    }
+  // La checklist siempre empieza en blanco: quien crea la tarea decide qué puntos
+  // lleva, sin heredar nada de la checklist ya guardada del sitio.
+  const seedItemsFor = async (_forType: string, _roomIds: Set<number>) => {
     setItems([emptyChecklistItem()]);
   };
 
@@ -241,31 +229,31 @@ export default function NuevaTareaMasiva() {
           onChangeText={setDescription}
           multiline
         />
-        <View style={s.chips}>
-          {creatableTypes.map((k) => (
-            <Chip
-              key={k}
-              label={taskType[k]}
-              active={type === k}
-              onPress={() => {
-                setType(k);
-                setAssignee(null);
-                // La checklist era la del tipo anterior: se resiembra para el nuevo.
-                seedItemsFor(k, selected);
-              }}
-            />
-          ))}
+        <View style={{ marginTop: 12 }}>
+          <IconPickerField
+            subtitle={t('bulk.type')}
+            value={type}
+            options={creatableTypes.map((k) => ({ value: k, ...taskType[k] }))}
+            onChange={(k) => {
+              setType(k);
+              setAssignee(null);
+              // La checklist era la del tipo anterior: se resiembra para el nuevo.
+              seedItemsFor(k, selected);
+            }}
+          />
         </View>
-        <View style={[s.chips, { marginTop: 8 }]}>
-          {Object.entries(priority).map(([key, p]) => (
-            <Chip
-              key={key}
-              label={p.label}
-              color={p.color}
-              active={prio === key}
-              onPress={() => setPrio(key)}
-            />
-          ))}
+        <View style={{ marginTop: 16 }}>
+          <Text style={s.subtitle}>{t('bulk.priority')}</Text>
+          <SegmentedControl
+            options={Object.entries(priority).map(([key, p]) => ({
+              value: key,
+              label: p.label,
+              icon: p.icon,
+              color: p.color,
+            }))}
+            value={prio}
+            onChange={setPrio}
+          />
         </View>
 
         <SectionTitle>{`${t('bulk.where')} · ${t('bulk.selectedCount', { n: selected.size })}`}</SectionTitle>
@@ -405,6 +393,7 @@ function makeStyles(colors: Colors) {
     } as TextStyle,
     textArea: { minHeight: 72, textAlignVertical: 'top' } as TextStyle,
     hint: { fontSize: 12, color: colors.inkSoft, marginTop: 6, lineHeight: 17 } as TextStyle,
+    subtitle: { ...typeScale.label, color: colors.inkSoft, marginBottom: 6 } as TextStyle,
     floorHeader: {
       flexDirection: 'row',
       justifyContent: 'space-between',
