@@ -187,6 +187,7 @@ export default function RoomDetail() {
   const [editType, setEditType] = useState<string | null>(null);
   const [editItems, setEditItems] = useState<ChecklistDraft[]>([]);
   const [savingChecklist, setSavingChecklist] = useState(false);
+  const [clearingType, setClearingType] = useState<string | null>(null);
 
   // Copiar la checklist de un tipo de trabajo a otras habitaciones, incluso después de creada.
   const [copyType, setCopyType] = useState<string | null>(null);
@@ -381,6 +382,27 @@ export default function RoomDetail() {
     }
   };
 
+  const clearChecklist = async (taskType: string) => {
+    const ok = await confirmAction(
+      t('room.checklistClearConfirmTitle'),
+      t('room.checklistClearConfirmBody'),
+      t('room.checklistClear'),
+      t('common.cancel')
+    );
+    if (!ok) return;
+    setClearingType(taskType);
+    try {
+      await api.put(`/api/rooms/${room.id}/checklist`, { task_type: taskType, items: [] });
+      await loadChecklist();
+      if (editType === taskType) setEditType(null);
+      notify(t('room.checklistCleared'));
+    } catch (e: any) {
+      notify(t('common.error'), e.message);
+    } finally {
+      setClearingType(null);
+    }
+  };
+
   const toggleCopyTarget = (targetId: number) => {
     setCopyTargets((prev) => {
       const next = new Set(prev);
@@ -535,6 +557,15 @@ export default function RoomDetail() {
                           hitSlop={8}
                         >
                           <Text style={s.checklistEdit}>{t('room.checklistCopy')}</Text>
+                        </Pressable>
+                      )}
+                      {!editing && points.length > 0 && (
+                        <Pressable
+                          onPress={() => clearChecklist(ct)}
+                          disabled={clearingType === ct}
+                          hitSlop={8}
+                        >
+                          <Text style={s.checklistDanger}>{t('room.checklistClear')}</Text>
                         </Pressable>
                       )}
                       <Pressable onPress={() => (editing ? setEditType(null) : startEditChecklist(ct))} hitSlop={8}>
@@ -907,6 +938,7 @@ function makeStyles(colors: Colors) {
     } as ViewStyle,
     checklistType: { fontSize: 14, fontWeight: '800', color: colors.ink } as TextStyle,
     checklistEdit: { fontSize: 13, fontWeight: '700', color: colors.accent } as TextStyle,
+    checklistDanger: { fontSize: 13, fontWeight: '700', color: colors.danger } as TextStyle,
     checklistEmpty: { fontSize: 13, color: colors.inkFaint, marginTop: 6 } as TextStyle,
     pointRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 } as ViewStyle,
     pointText: { flex: 1, fontSize: 14, color: colors.inkSoft } as TextStyle,
