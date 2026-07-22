@@ -1,23 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Modal, Pressable, ScrollView, Text, TextInput, TextStyle, View, ViewStyle } from 'react-native';
 import { Avatar, Button, Card, Chip, Empty, ErrorState, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
-import { api, type Area, type Role, type User } from '../lib/api';
+import { api, type Area, type User } from '../lib/api';
 import { useAreaLabels, useT } from '../lib/i18n';
 import { useAuth } from '../lib/auth';
-import { AREAS, ROLES, canGrantRole } from '../lib/permissions';
-import { roleColor, type Colors } from '../lib/theme';
+import { AREAS, canGrantRole } from '../lib/permissions';
+import { radius, roleColor, type Colors } from '../lib/theme';
 import { useThemedStyles, useTheme } from '../lib/theme-context';
 
-// Solo el empleado vive en un área; el jefe y el admin las cruzan todas.
-const NEEDS_AREA = (role: Role) => role === 'empleado';
-
-const ROLE_ICON: Record<Role, keyof typeof Ionicons.glyphMap> = {
-  empleado: 'person-outline',
-  jefe: 'briefcase-outline',
-  admin: 'shield-outline',
-};
+function emptyForm() {
+  return { username: '', name: '', password: '', area: 'limpieza' as Area };
+}
 
 export default function Usuarios() {
   const navigation = useNavigation();
@@ -27,18 +22,13 @@ export default function Usuarios() {
   const s = useThemedStyles(makeStyles);
   const areaLabels = useAreaLabels();
   const [users, setUsers] = useState<User[]>([]);
-  const [username, setUsername] = useState('');
-  const [name, setName] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState<Role>('empleado');
-  const [area, setArea] = useState<Area>('limpieza');
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
   const [showInactive, setShowInactive] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
-
-  // Un jefe da de alta a su gente; fabricar jefes y admins es cosa del administrador.
-  const grantableRoles = ROLES.filter((r) => canGrantRole(me, r));
 
   useEffect(() => {
     navigation.setOptions({ title: t('users.title') });
@@ -61,20 +51,22 @@ export default function Usuarios() {
     load();
   }, [load]);
 
+  const openModal = () => {
+    setForm(emptyForm());
+    setOpen(true);
+  };
+
   const create = async () => {
-    if (!username.trim() || !name.trim() || !password) return;
+    if (!form.username.trim() || !form.name.trim() || !form.password) return;
     setCreating(true);
     try {
       await api.post('/api/users', {
-        username: username.trim(),
-        name: name.trim(),
-        password,
-        role,
-        area: NEEDS_AREA(role) ? area : null,
+        username: form.username.trim(),
+        name: form.name.trim(),
+        password: form.password,
+        area: form.area,
       });
-      setUsername('');
-      setName('');
-      setPassword('');
+      setOpen(false);
       await load();
     } catch (e: any) {
       notify(t('common.error'), e.message);
@@ -92,11 +84,27 @@ export default function Usuarios() {
     }
   };
 
+  // Búsqueda por nombre o usuario, agrupado por área (jefe/admin no tienen una y
+  // caen en un grupo aparte al principio).
+  const grouped = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? users.filter((u) => u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q))
+      : users;
+    const groups = new Map<string, User[]>();
+    for (const u of filtered) {
+      const key = u.area ?? '—';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(u);
+    }
+    return [...groups.entries()];
+  }, [users, query]);
+
   if (!loaded) {
     return (
       <Screen>
         <View style={{ padding: 16, gap: 10 }}>
-          <Skeleton variant="card" height={200} />
+          <Skeleton variant="card" height={64} />
           <Skeleton variant="card" height={64} />
         </View>
       </Screen>
@@ -115,95 +123,102 @@ export default function Usuarios() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView style={s.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView
-        style={s.screen}
-        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
-        keyboardShouldPersistTaps="handled"
-      >
-        <SectionTitle>{t('users.new')}</SectionTitle>
-        <View style={s.form}>
-          <TextInput
-            style={s.input}
-            placeholder={t('users.username')}
-            placeholderTextColor={colors.inkFaint}
-            autoCapitalize="none"
-            value={username}
-            onChangeText={setUsername}
-          />
-          <TextInput
-            style={s.input}
-            placeholder={t('users.name')}
-            placeholderTextColor={colors.inkFaint}
-            value={name}
-            onChangeText={setName}
-          />
-          <TextInput
-            style={s.input}
-            placeholder={t('users.password')}
-            placeholderTextColor={colors.inkFaint}
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
-          <Text style={s.fieldLabel}>{t('users.role')}</Text>
-          <View style={s.chips}>
-            {grantableRoles.map((r) => (
-              <Pressable key={r} onPress={() => setRole(r)} style={[s.chip, role === r && s.chipActive]}>
-                <Ionicons name={ROLE_ICON[r]} size={14} color={role === r ? colors.bg : colors.inkSoft} />
-                <Text style={[s.chipText, role === r && { color: colors.bg }]}>{t(`role.${r}` as any)}</Text>
-              </Pressable>
-            ))}
+      <View style={s.screen}>
+        <View style={s.headerRow}>
+          <View style={s.searchRow}>
+            <Ionicons name="search-outline" size={16} color={colors.inkFaint} />
+            <TextInput
+              style={s.searchInput}
+              value={query}
+              onChangeText={setQuery}
+              placeholder={t('users.search')}
+              placeholderTextColor={colors.inkFaint}
+              autoCapitalize="none"
+            />
           </View>
-
-          {NEEDS_AREA(role) && (
-            <>
-              <Text style={s.fieldLabel}>{t('users.area')}</Text>
-              <View style={s.chips}>
-                {AREAS.map((a) => (
-                  <Chip key={a} label={areaLabels[a]} active={area === a} onPress={() => setArea(a)} />
-                ))}
-              </View>
-            </>
-          )}
-          <Text style={s.hint}>{t('users.areaHint')}</Text>
-
-          <Button
-            label={t('common.create')}
-            onPress={create}
-            loading={creating}
-            disabled={!username.trim() || !name.trim() || !password}
-          />
+          <Button label={t('users.new')} icon="person-add-outline" onPress={openModal} />
         </View>
-
-        <SectionTitle>{t('users.title')}</SectionTitle>
         <Pressable onPress={() => setShowInactive((v) => !v)} style={s.toggle} hitSlop={8}>
           <Text style={s.toggleText}>{showInactive ? t('users.showActive') : t('users.showAll')}</Text>
         </Pressable>
-        {users.length === 0 && <Empty text={t('users.empty')} />}
-        {users.map((u) => (
-          <Card key={u.id} style={[s.card, !u.active && s.cardInactive]}>
-            <Avatar name={u.name} color={u.active ? roleColor(colors, u.role) : colors.inkFaint} size={40} />
-            <View style={{ flex: 1 }}>
-              <Text style={s.userName}>{u.name}</Text>
-              <Text style={s.meta}>
-                {u.username} · {t(`role.${u.role}` as any)}
-                {u.area ? ` · ${areaLabels[u.area]}` : ''}
-                {!u.active ? ` · ${t('users.inactive')}` : ''}
-              </Text>
+
+        {users.length === 0 ? (
+          <Empty text={t('users.empty')} />
+        ) : (
+          <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 0, gap: 4 }}>
+            {grouped.map(([area, list]) => (
+              <View key={area}>
+                <SectionTitle>{area === '—' ? t('users.noArea') : areaLabels[area as Area]}</SectionTitle>
+                {list.map((u) => (
+                  <Card key={u.id} style={[s.card, !u.active && s.cardInactive]}>
+                    <Avatar name={u.name} color={u.active ? roleColor(colors, u.role) : colors.inkFaint} size={40} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.userName}>{u.name}</Text>
+                      <Text style={s.meta}>
+                        @{u.username} · {t(`role.${u.role}` as any)}
+                        {!u.active ? ` · ${t('users.inactive')}` : ''}
+                      </Text>
+                    </View>
+                    {/* Un jefe no puede desactivar ni reactivar a un admin: el servidor lo rechazaría igual. */}
+                    {canGrantRole(me, u.role) && u.id !== me?.id && (
+                      u.active ? (
+                        <Button label={t('users.deactivate')} kind="danger" onPress={() => setActive(u, false)} />
+                      ) : (
+                        <Button label={t('users.activate')} onPress={() => setActive(u, true)} />
+                      )
+                    )}
+                  </Card>
+                ))}
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={s.backdrop} onPress={() => setOpen(false)}>
+          <Pressable style={s.panel} onPress={() => {}}>
+            <Text style={s.panelTitle}>{t('users.new')}</Text>
+            <View style={{ gap: 10 }}>
+              <TextInput
+                style={s.input}
+                placeholder={t('users.username')}
+                placeholderTextColor={colors.inkFaint}
+                autoCapitalize="none"
+                value={form.username}
+                onChangeText={(v) => setForm((f) => ({ ...f, username: v }))}
+              />
+              <TextInput
+                style={s.input}
+                placeholder={t('users.name')}
+                placeholderTextColor={colors.inkFaint}
+                value={form.name}
+                onChangeText={(v) => setForm((f) => ({ ...f, name: v }))}
+              />
+              <TextInput
+                style={s.input}
+                placeholder={t('users.password')}
+                placeholderTextColor={colors.inkFaint}
+                secureTextEntry
+                value={form.password}
+                onChangeText={(v) => setForm((f) => ({ ...f, password: v }))}
+              />
+              <Text style={s.fieldLabel}>{t('users.area')}</Text>
+              <View style={s.chips}>
+                {AREAS.map((a) => (
+                  <Chip key={a} label={areaLabels[a]} active={form.area === a} onPress={() => setForm((f) => ({ ...f, area: a }))} />
+                ))}
+              </View>
+              <Button
+                label={t('common.create')}
+                onPress={create}
+                loading={creating}
+                disabled={!form.username.trim() || !form.name.trim() || !form.password}
+              />
             </View>
-            {/* Un jefe no puede desactivar ni reactivar a un admin: el servidor lo rechazaría igual. */}
-            {canGrantRole(me, u.role) && u.id !== me?.id && (
-              u.active ? (
-                <Button label={t('users.deactivate')} kind="danger" onPress={() => setActive(u, false)} />
-              ) : (
-                <Button label={t('users.activate')} onPress={() => setActive(u, true)} />
-              )
-            )}
-          </Card>
-        ))}
-      </ScrollView>
-      </KeyboardAvoidingView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -211,7 +226,26 @@ export default function Usuarios() {
 function makeStyles(colors: Colors) {
   return {
     screen: { flex: 1 } as ViewStyle,
-    form: { gap: 10, marginBottom: 8 } as ViewStyle,
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 16,
+      paddingTop: 12,
+    } as ViewStyle,
+    searchRow: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.sm,
+      paddingHorizontal: 12,
+      height: 44,
+      backgroundColor: colors.surfaceSunken,
+    } as ViewStyle,
+    searchInput: { flex: 1, fontSize: 15, color: colors.ink, padding: 0 } as TextStyle,
     input: {
       borderWidth: 1,
       borderColor: colors.hairline,
@@ -223,22 +257,8 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.surface,
     } as TextStyle,
     fieldLabel: { fontSize: 12, fontWeight: '700', color: colors.inkSoft, marginTop: 4 } as TextStyle,
-    hint: { fontSize: 12, color: colors.inkFaint, lineHeight: 17 } as TextStyle,
     chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
-    chip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 999,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      backgroundColor: colors.surface,
-    } as ViewStyle,
-    chipActive: { backgroundColor: colors.ink, borderColor: 'transparent' } as ViewStyle,
-    chipText: { fontSize: 13, fontWeight: '700', color: colors.ink } as TextStyle,
-    toggle: { minHeight: 44, justifyContent: 'center', marginBottom: 8 } as ViewStyle,
+    toggle: { minHeight: 36, justifyContent: 'center', paddingHorizontal: 16 } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       flexDirection: 'row',
@@ -249,5 +269,20 @@ function makeStyles(colors: Colors) {
     cardInactive: { opacity: 0.6 } as ViewStyle,
     userName: { fontSize: 15, fontWeight: '700', color: colors.ink } as TextStyle,
     meta: { fontSize: 12, color: colors.inkSoft } as TextStyle,
+    backdrop: {
+      flex: 1,
+      backgroundColor: colors.overlay,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 20,
+    } as ViewStyle,
+    panel: {
+      width: '100%',
+      maxWidth: 400,
+      backgroundColor: colors.surface,
+      borderRadius: radius.lg,
+      padding: 18,
+    } as ViewStyle,
+    panelTitle: { fontSize: 18, fontWeight: '800', color: colors.ink, marginBottom: 14 } as TextStyle,
   };
 }

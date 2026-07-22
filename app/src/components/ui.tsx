@@ -11,6 +11,7 @@ import {
   Pressable,
   StyleProp,
   Text,
+  TextInput,
   TextStyle,
   View,
   ViewStyle,
@@ -457,6 +458,148 @@ export function IconPickerField<T extends string>({
   );
 }
 
+// A quién le llega una tarea: una persona concreta, un grupo elegido a mano, todo el
+// mundo del área, o reparto automático. Reemplaza al viejo muro de un Chip por
+// empleado — con equipos grandes eso no escala ni se busca por nombre.
+export type AssignMode =
+  | { mode: 'auto' }
+  | { mode: 'all' }
+  | { mode: 'one'; id: number }
+  | { mode: 'group'; ids: number[] };
+
+export function assignModeLabel(mode: AssignMode, staff: { id: number; name: string }[], labels: { auto: string; all: string; group: (n: number) => string }): string {
+  if (mode.mode === 'auto') return labels.auto;
+  if (mode.mode === 'all') return labels.all;
+  if (mode.mode === 'one') return staff.find((m) => m.id === mode.id)?.name ?? '—';
+  return labels.group(mode.ids.length);
+}
+
+export function EmployeePicker({
+  title,
+  staff,
+  value,
+  onChange,
+  allowAuto = true,
+  labels,
+}: {
+  title: string;
+  staff: { id: number; name: string; username: string }[];
+  value: AssignMode;
+  onChange: (v: AssignMode) => void;
+  allowAuto?: boolean;
+  labels: { auto: string; all: string; search: string; confirm: string; group: (n: number) => string };
+}) {
+  const { colors } = useTheme();
+  const s = useThemedStyles(makeSharedStyles);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  // Selección en curso dentro del modal: no pisa `value` hasta confirmar.
+  const [draft, setDraft] = useState<Set<number>>(new Set(value.mode === 'group' ? value.ids : value.mode === 'one' ? [value.id] : []));
+
+  const filtered = staff.filter((m) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return m.name.toLowerCase().includes(q) || m.username.toLowerCase().includes(q);
+  });
+
+  const openPicker = () => {
+    setDraft(new Set(value.mode === 'group' ? value.ids : value.mode === 'one' ? [value.id] : []));
+    setQuery('');
+    Haptics.selectionAsync();
+    setOpen(true);
+  };
+
+  const toggle = (id: number) => {
+    Haptics.selectionAsync();
+    const next = new Set(draft);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setDraft(next);
+  };
+
+  const confirm = () => {
+    if (draft.size === 0) onChange({ mode: 'all' });
+    else if (draft.size === 1) onChange({ mode: 'one', id: [...draft][0] });
+    else onChange({ mode: 'group', ids: [...draft] });
+    setOpen(false);
+  };
+
+  return (
+    <View>
+      <Text style={s.pickerSubtitle}>{title}</Text>
+      <Pressable onPress={openPicker} style={[s.pickerButton, { borderColor: colors.hairline }]}>
+        <Text style={s.pickerButtonText}>{assignModeLabel(value, staff, labels)}</Text>
+        <Ionicons name="chevron-down" size={16} color={colors.inkSoft} />
+      </Pressable>
+
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={s.pickerBackdrop} onPress={() => setOpen(false)}>
+          <Pressable style={[s.pickerPanel, s.empPanel]} onPress={() => {}}>
+            <Text style={s.pickerPanelTitle}>{title}</Text>
+
+            <View style={s.empSearchRow}>
+              <Ionicons name="search-outline" size={16} color={colors.inkFaint} />
+              <TextInput
+                style={s.empSearchInput}
+                value={query}
+                onChangeText={setQuery}
+                placeholder={labels.search}
+                placeholderTextColor={colors.inkFaint}
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={s.empChipRow}>
+              {allowAuto && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    onChange({ mode: 'auto' });
+                    setOpen(false);
+                  }}
+                  style={[s.chip, value.mode === 'auto' && s.chipActive]}
+                >
+                  <Text style={[s.chipText, value.mode === 'auto' && { color: colors.onAccent }]}>{labels.auto}</Text>
+                </Pressable>
+              )}
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  onChange({ mode: 'all' });
+                  setOpen(false);
+                }}
+                style={[s.chip, value.mode === 'all' && s.chipActive]}
+              >
+                <Text style={[s.chipText, value.mode === 'all' && { color: colors.onAccent }]}>{labels.all}</Text>
+              </Pressable>
+            </View>
+
+            <View style={s.empList}>
+              {filtered.map((m) => {
+                const checked = draft.has(m.id);
+                return (
+                  <Pressable key={m.id} onPress={() => toggle(m.id)} style={s.empRow}>
+                    <View style={[s.empCheckbox, checked && s.empCheckboxActive]}>
+                      {checked && <Ionicons name="checkmark" size={13} color={colors.onAccent} />}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.empRowName}>{m.name}</Text>
+                      <Text style={s.empRowUsername}>@{m.username}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+              {filtered.length === 0 && <Text style={s.empty}>—</Text>}
+            </View>
+
+            <Button label={labels.confirm} onPress={confirm} />
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
 // Press-scale + haptics genérico para filas de lista pulsables.
 export function AnimatedPressable({
   children,
@@ -608,5 +751,41 @@ function makeSharedStyles(colors: Colors) {
       borderRadius: radius.md,
     } as ViewStyle,
     pickerTileText: { ...typeScale.caption, color: colors.ink, textAlign: 'center' } as TextStyle,
+    empPanel: { maxHeight: '80%' } as ViewStyle,
+    empSearchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: radius.sm,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      backgroundColor: colors.surfaceSunken,
+      marginBottom: 10,
+    } as ViewStyle,
+    empSearchInput: { flex: 1, ...typeScale.body, color: colors.ink, padding: 0 } as TextStyle,
+    empChipRow: { flexDirection: 'row', gap: 8, marginBottom: 10 } as ViewStyle,
+    empList: { gap: 2, marginBottom: 14 } as ViewStyle,
+    empRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 10,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairline,
+    } as ViewStyle,
+    empCheckbox: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      borderWidth: 1.5,
+      borderColor: colors.hairline,
+      alignItems: 'center',
+      justifyContent: 'center',
+    } as ViewStyle,
+    empCheckboxActive: { backgroundColor: colors.ink, borderColor: colors.ink } as ViewStyle,
+    empRowName: { ...typeScale.bodyStrong, color: colors.ink } as TextStyle,
+    empRowUsername: { ...typeScale.caption, color: colors.inkSoft } as TextStyle,
   };
 }

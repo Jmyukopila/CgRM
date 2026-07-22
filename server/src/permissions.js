@@ -21,12 +21,15 @@ export const seesAllAreas = (user) => isAtLeast(user, 'jefe') || user.area == nu
 export const inArea = (user, area) => seesAllAreas(user) || user.area === area;
 
 // Ejecutar el trabajo: el asignado siempre; cualquiera del área si nadie la ha cogido
-// todavía; el jefe puede rematar la tarea de cualquiera en cualquier área.
+// todavía (o, si se repartió a un grupo concreto, solo alguien de ese grupo); el jefe
+// puede rematar la tarea de cualquiera en cualquier área.
 export function canWorkTask(user, task) {
   if (isAtLeast(user, 'jefe')) return true;
   if (!inArea(user, task.area)) return false;
   if (task.assignee_id === user.id) return true;
-  return task.assignee_id == null;
+  if (task.assignee_id != null) return false;
+  if (task.assignee_group?.length) return task.assignee_group.includes(user.id);
+  return true;
 }
 
 // Supervisar (crear, asignar, cancelar) dentro de un área.

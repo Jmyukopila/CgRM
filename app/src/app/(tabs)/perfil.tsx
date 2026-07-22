@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { router } from 'expo-router';
+import { useState } from 'react';
 import { ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
 import { AnimatedPressable, Avatar, Button, Card, confirmAction, notify, Screen, SegmentedControl } from '../../components/ui';
 import { api, API_URL } from '../../lib/api';
@@ -23,24 +23,13 @@ const ADMIN_LINKS = [
 ];
 
 export default function Perfil() {
-  const { user, logout } = useAuth();
+  const { user, logout, clockedIn, setClockedIn } = useAuth();
   const { t, lang, setLang } = useT();
   const { colors, preference, setPreference } = useTheme();
   const areas = useAreaLabels();
   const s = useThemedStyles(makeStyles);
   const [busy, setBusy] = useState(false);
   const [shiftBusy, setShiftBusy] = useState(false);
-  // Ya fichó la entrada de hoy y aún no la salida: alterna qué botón se muestra.
-  const [clockedIn, setClockedIn] = useState(false);
-
-  useFocusEffect(
-    useCallback(() => {
-      api
-        .get<{ lastKind: 'entrada' | 'salida' | null }>('/api/shift/today')
-        .then((r) => setClockedIn(r.lastKind === 'entrada'))
-        .catch(() => {});
-    }, [])
-  );
 
   if (!user) return null;
 

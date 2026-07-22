@@ -61,6 +61,7 @@ function routeFor(data: Record<string, unknown>): string | null {
   if (refType === 'incident') return `/incident/${refId}`;
   if (refType === 'room') return `/room/${refId}`;
   if (refType === 'inventory') return '/inventario';
+  if (refType === 'lost_item') return '/objetos-perdidos';
   return null;
 }
 

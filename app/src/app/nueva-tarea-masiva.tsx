@@ -20,12 +20,14 @@ import { ChecklistEditor, emptyChecklistItem } from '../components/checklist-edi
 import {
   Button,
   Chip,
+  EmployeePicker,
   ErrorState,
   IconPickerField,
   SectionTitle,
   Screen,
   SegmentedControl,
   notify,
+  type AssignMode,
 } from '../components/ui';
 import { api, type ChecklistDraft, type Room, type User } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -60,7 +62,7 @@ export default function NuevaTareaMasiva() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [prio, setPrio] = useState('media');
-  const [assignee, setAssignee] = useState<number | 'auto' | null>(null);
+  const [assignee, setAssignee] = useState<AssignMode>({ mode: 'all' });
 
   const [items, setItems] = useState<ChecklistDraft[]>([emptyChecklistItem()]);
 
@@ -167,7 +169,8 @@ export default function NuevaTareaMasiva() {
       title: title.trim(),
       description: description.trim(),
       priority: prio,
-      assignee_id: assignee,
+      assignee_id: assignee.mode === 'auto' ? 'auto' : assignee.mode === 'one' ? assignee.id : 'all',
+      assignee_group: assignee.mode === 'group' ? assignee.ids : null,
       // La checklist editada aquí ES la checklist individual de cada sitio elegido para
       // este tipo: se persiste siempre, no hay ya un modo "a medida" que la deje sin guardar.
       items: custom,
@@ -236,7 +239,7 @@ export default function NuevaTareaMasiva() {
             options={creatableTypes.map((k) => ({ value: k, ...taskType[k] }))}
             onChange={(k) => {
               setType(k);
-              setAssignee(null);
+              setAssignee({ mode: 'all' });
               // La checklist era la del tipo anterior: se resiembra para el nuevo.
               seedItemsFor(k, selected);
             }}
@@ -287,29 +290,20 @@ export default function NuevaTareaMasiva() {
           );
         })}
 
-        <SectionTitle>{t('bulk.who')}</SectionTitle>
-        <View style={s.chips}>
-          <Chip
-            label={t('common.unassigned')}
-            active={assignee === null}
-            onPress={() => setAssignee(null)}
-          />
-          {assignableStaff.length > 0 && (
-            <Chip
-              label={t('bulk.autoAssign')}
-              active={assignee === 'auto'}
-              onPress={() => setAssignee('auto')}
-            />
-          )}
-          {assignableStaff.map((m) => (
-            <Chip
-              key={m.id}
-              label={m.name}
-              active={assignee === m.id}
-              onPress={() => setAssignee(m.id)}
-            />
-          ))}
-        </View>
+        <EmployeePicker
+          title={t('bulk.who')}
+          staff={assignableStaff}
+          value={assignee}
+          onChange={setAssignee}
+          allowAuto={assignableStaff.length > 0}
+          labels={{
+            auto: t('bulk.autoAssign'),
+            all: t('common.unassigned'),
+            search: t('bulk.searchStaff'),
+            confirm: t('common.save'),
+            group: (n) => t('bulk.groupOf', { n }),
+          }}
+        />
 
         <SectionTitle>{t('bulk.checklist')}</SectionTitle>
         <Text style={s.hint}>{t('bulk.checklistHint')}</Text>

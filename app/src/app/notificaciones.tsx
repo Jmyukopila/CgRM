@@ -13,6 +13,7 @@ function routeFor(n: AppNotification): string | null {
   if (n.ref_type === 'incident') return `/incident/${n.ref_id}`;
   if (n.ref_type === 'room') return `/room/${n.ref_id}`;
   if (n.ref_type === 'inventory') return '/inventario';
+  if (n.ref_type === 'lost_item') return '/objetos-perdidos';
   return null;
 }
 

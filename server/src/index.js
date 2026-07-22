@@ -122,12 +122,17 @@ async function runTaskSchedules() {
     const room = await getRoom(s.room_id);
     if (!room) continue;
     // Reparto equilibrado en cada pasada, no el que tocaba al crear la programación:
-    // quien tenga menos carga HOY se lleva la instancia de hoy. Si la programación no
-    // fijó a nadie, tampoco queda huérfana: se reparte igual que con auto_assign.
-    const assigneeId = s.assignee_id ?? (await pickLeastLoadedAssignee(s.area));
+    // quien tenga menos carga HOY se lleva la instancia de hoy (solo si la programación
+    // pidió reparto automático de verdad, `auto_assign`). Un grupo o "todos" no se
+    // auto-asigna a nadie en concreto: la instancia sale sin assignee_id.
+    const assigneeId = s.assignee_group?.length
+      ? null
+      : s.auto_assign
+        ? await pickLeastLoadedAssignee(s.area)
+        : s.assignee_id;
     const taskId = await createTask({
       room, area: s.area, type: s.type, title: s.title, description: s.description,
-      priority: s.priority, assignee_id: assigneeId, createdBy: s.created_by,
+      priority: s.priority, assignee_id: assigneeId, assignee_group: s.assignee_group, createdBy: s.created_by,
       scheduleId: s.id, scheduledSlot: s.slot_at,
       dueAt: s.freq === 'una_vez' && s.date_to ? { endOfLocalDay: s.date_to } : null,
     });
@@ -136,6 +141,34 @@ async function runTaskSchedules() {
       await exec('UPDATE task_schedules SET active = false WHERE id = $1', [s.id]);
     }
   }
+}
+
+// Cierra solo los turnos cuyo heartbeat lleva más de 7 min en silencio (2-3 pings
+// perdidos de margen sobre el intervalo de 2 min del cliente, para no cerrar por un
+// bache de red). La hora de cierre es la del último heartbeat visto, no la de este
+// barrido — así "cuánto tardó en correr el barrido" no afecta a la hora registrada.
+async function sweepIdleShifts() {
+  await exec(
+    `INSERT INTO shift_logs (user_id, kind, ended_at)
+     SELECT latest.user_id, 'salida', latest.last_seen_at FROM (
+       SELECT DISTINCT ON (user_id) user_id, kind, last_seen_at
+       FROM shift_logs ORDER BY user_id, ended_at DESC
+     ) latest
+     WHERE latest.kind = 'entrada' AND latest.last_seen_at < now() - interval '7 minutes'`
+  );
+}
+
+// Los objetos ya devueltos no necesitan quedarse en el registro para siempre; se
+// purgan 15 días después de marcarse 'entregado' (resolved_at), foto incluida.
+async function purgeOldLostItems() {
+  const stale = await all(
+    `SELECT id, photo FROM lost_items WHERE status = 'entregado' AND resolved_at < now() - interval '15 days'`
+  );
+  if (stale.length === 0) return;
+  for (const item of stale) {
+    if (item.photo) await storage.removeFile(item.photo).catch(() => {});
+  }
+  await exec('DELETE FROM lost_items WHERE id = ANY($1)', [stale.map((i) => i.id)]);
 }
 
 // Express 4 no captura el rechazo de un handler async: sin esto, un error de la
@@ -326,13 +359,16 @@ function validateUserRoleArea(actor, role, area) {
   return null;
 }
 
+// Toda cuenta que se da de alta desde aquí es empleado: el rol nunca viene del
+// cliente (si algún día hace falta un jefe/admin nuevo, se crea aparte por SQL,
+// como ya se hizo con las 2 cuentas actuales).
 app.post('/api/users', h(async (req, res) => {
   if (!canManageUsers(req.user)) return deny(res);
-  const { username, password, name, role, area = null } = req.body || {};
+  const { username, password, name, area = null } = req.body || {};
   if (!username?.trim() || !password || !name?.trim()) {
     return res.status(400).json({ error: 'Usuario, contraseña y nombre son obligatorios' });
   }
-  const invalid = validateUserRoleArea(req.user, role, area);
+  const invalid = validateUserRoleArea(req.user, 'empleado', area);
   if (invalid) return res.status(400).json({ error: invalid });
 
   const exists = await one('SELECT id FROM users WHERE username = $1', [username.trim().toLowerCase()]);
@@ -340,10 +376,7 @@ app.post('/api/users', h(async (req, res) => {
 
   const user = await one(
     'INSERT INTO users (username, password_hash, name, role, area) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [
-      username.trim().toLowerCase(), hashPassword(password), name.trim(), role,
-      role === 'empleado' ? area : null,
-    ]
+    [username.trim().toLowerCase(), hashPassword(password), name.trim(), 'empleado', area]
   );
   res.status(201).json(publicUser(user));
 }));
@@ -522,7 +555,7 @@ app.get('/api/tasks', h(async (req, res) => {
     // tenga o no área fija): es trabajo que le toca. Jefe/admin no "cogen" trabajo
     // suelto, así que para ellos "mías" es solo lo asignado a su nombre.
     clauses.push(req.user.role === 'empleado'
-      ? `(t.assignee_id = $${p} OR t.assignee_id IS NULL)`
+      ? `(t.assignee_id = $${p} OR (t.assignee_id IS NULL AND (t.assignee_group IS NULL OR $${p} = ANY(t.assignee_group))))`
       : `t.assignee_id = $${p}`);
   }
   if (req.query.room_id) {
@@ -630,7 +663,7 @@ function getRoomChecklist(roomId, taskType) {
 }
 
 async function createTask({
-  room, area, type, title, description, priority, assignee_id, incident_id, createdBy,
+  room, area, type, title, description, priority, assignee_id, assignee_group = null, incident_id, createdBy,
   scheduleId = null, scheduledSlot = null, dueAt = null, items = null,
 }) {
   let dueAtValue = null;
@@ -645,13 +678,13 @@ async function createTask({
   // ON CONFLICT protege el slot de una programación: si dos pasadas del generador
   // solapan (arranque + intervalo, o dos réplicas), la segunda no inserta nada.
   const inserted = await one(
-    `INSERT INTO tasks (room_id, area, type, title, description, priority, assignee_id, incident_id, created_by, due_at, schedule_id, scheduled_slot)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, now() + ($11 || ' hours')::interval), $12, $13)
+    `INSERT INTO tasks (room_id, area, type, title, description, priority, assignee_id, assignee_group, incident_id, created_by, due_at, schedule_id, scheduled_slot)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, now() + ($12 || ' hours')::interval), $13, $14)
      ON CONFLICT (schedule_id, scheduled_slot) WHERE schedule_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [
       room.id, area, type, title || `${TASK_TITLES[type]} · ${room.name}`, description, priority,
-      assignee_id, incident_id ?? null, createdBy, dueAtValue, TASK_SLA_HOURS[priority],
+      assignee_id, assignee_group?.length ? assignee_group : null, incident_id ?? null, createdBy, dueAtValue, TASK_SLA_HOURS[priority],
       scheduleId, scheduledSlot,
     ]
   );
@@ -693,6 +726,11 @@ async function createTask({
       type: 'task_assigned', title: 'Nueva tarea asignada', body: `${TASK_TITLES[type]} · ${room.name}`,
       ref: { type: 'task', id: taskId },
     });
+  } else if (assignee_group?.length) {
+    await notifyUsers(assignee_group, {
+      type: 'task_assigned', title: 'Nueva tarea para tu grupo', body: `${TASK_TITLES[type]} · ${room.name}`,
+      ref: { type: 'task', id: taskId },
+    });
   }
   return taskId;
 }
@@ -718,10 +756,14 @@ async function pickLeastLoadedAssignee(area) {
 
 // Validaciones comunes a crear una tarea directa (POST /api/tasks) o una programación
 // (POST /api/task-schedules): tipo, prioridad, área supervisada, habitaciones válidas
-// y asignado dentro del área. assignee_id: 'auto' pide reparto equilibrado en vez de
-// una persona fija (ver autoAssign en el resultado).
+// y a quién le llega. assignee_id acepta:
+//   'auto'         → reparto equilibrado, uno fijo por pasada (autoAssign en el resultado)
+//   'all' / null   → sin asignar, visible a toda el área (comportamiento de siempre)
+//   un id          → una sola persona
+// assignee_group (array de ids) es alternativo a assignee_id: la tarea queda sin
+// asignee_id fijo pero solo ese grupo puede cogerla (canWorkTask en permissions.js).
 async function validateTaskPayload(user, body) {
-  const { room_id, room_ids, type, area, priority = 'media', assignee_id = null } = body || {};
+  const { room_id, room_ids, type, area, priority = 'media', assignee_id = null, assignee_group = null } = body || {};
   if (!TASK_TYPES.includes(type)) return { error: 'Tipo de tarea no válido', code: 400 };
   if (!VALID_PRIORITIES.includes(priority)) return { error: 'Prioridad no válida', code: 400 };
 
@@ -732,19 +774,27 @@ async function validateTaskPayload(user, body) {
   const rooms = await Promise.all(ids.map((id) => (toId(id) ? getRoom(toId(id)) : null)));
   if (rooms.length === 0 || rooms.some((r) => !r)) return { error: 'Habitación no válida', code: 400 };
 
+  if (Array.isArray(assignee_group) && assignee_group.length > 0) {
+    const uniqueIds = [...new Set(assignee_group.map((id) => toId(id)).filter(Boolean))];
+    const members = await Promise.all(uniqueIds.map((id) => one('SELECT * FROM users WHERE id = $1 AND active', [id])));
+    if (members.length === 0 || members.some((m) => !m)) return { error: 'Persona del grupo no válida', code: 400 };
+    const outsider = members.find((m) => !inArea(m, taskArea));
+    if (outsider) return { error: `${outsider.name} no pertenece al área de ${taskArea}`, code: 400 };
+    return { taskArea, rooms, assigneeId: null, assigneeGroup: uniqueIds, autoAssign: false, priority };
+  }
+
   if (assignee_id === 'auto') {
-    return { taskArea, rooms, assigneeId: null, autoAssign: true, priority };
+    return { taskArea, rooms, assigneeId: null, assigneeGroup: null, autoAssign: true, priority };
   }
-  let assigneeId = null;
-  if (assignee_id) {
-    const assignee = await one('SELECT * FROM users WHERE id = $1 AND active', [toId(assignee_id)]);
-    if (!assignee) return { error: 'Persona asignada no válida', code: 400 };
-    if (!inArea(assignee, taskArea)) {
-      return { error: `${assignee.name} no pertenece al área de ${taskArea}`, code: 400 };
-    }
-    assigneeId = assignee.id;
+  if (assignee_id === 'all' || assignee_id == null) {
+    return { taskArea, rooms, assigneeId: null, assigneeGroup: null, autoAssign: false, priority };
   }
-  return { taskArea, rooms, assigneeId, autoAssign: false, priority };
+  const assignee = await one('SELECT * FROM users WHERE id = $1 AND active', [toId(assignee_id)]);
+  if (!assignee) return { error: 'Persona asignada no válida', code: 400 };
+  if (!inArea(assignee, taskArea)) {
+    return { error: `${assignee.name} no pertenece al área de ${taskArea}`, code: 400 };
+  }
+  return { taskArea, rooms, assigneeId: assignee.id, assigneeGroup: null, autoAssign: false, priority };
 }
 
 // Acepta room_id (una habitación) o room_ids (asignación masiva a varias a la vez).
@@ -766,13 +816,13 @@ app.post('/api/tasks', requireRank('jefe'), h(async (req, res) => {
     if (items && save_checklist) await setRoomChecklist(room.id, type, items);
     // Recalculado en cada vuelta (no una vez para todo el lote): así una tanda de 8
     // habitaciones se reparte entre el equipo en vez de caer entera sobre el mismo.
-    // Si no se eligió a nadie ("Sin asignar" o 'auto'), nunca queda huérfana: se reparte
-    // sola al empleado con menos carga del área, así siempre le llega a alguien.
-    const assigneeId = v.assigneeId ?? (await pickLeastLoadedAssignee(v.taskArea));
+    // 'auto' reparte una persona fija por tarea; un grupo o "todos" queda sin asignee_id
+    // (lo coge quien corresponda), no se auto-asigna a nadie en concreto.
+    const assigneeId = v.autoAssign ? await pickLeastLoadedAssignee(v.taskArea) : v.assigneeId;
     taskIds.push(
       await createTask({
         room, area: v.taskArea, type, title, description, priority: v.priority,
-        assignee_id: assigneeId, createdBy: req.user.id, items,
+        assignee_id: assigneeId, assignee_group: v.assigneeGroup, createdBy: req.user.id, items,
       })
     );
   }
@@ -886,11 +936,11 @@ app.post('/api/task-schedules', requireRank('jefe'), h(async (req, res) => {
     if (items) await setRoomChecklist(room.id, type, items);
     const row = await one(
       `INSERT INTO task_schedules
-         (room_id, area, type, title, description, priority, assignee_id, auto_assign, freq, run_hours, date_from, date_to, created_by, week_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, (now() AT TIME ZONE $14)::date), $12, $13, $15)
+         (room_id, area, type, title, description, priority, assignee_id, assignee_group, auto_assign, freq, run_hours, date_from, date_to, created_by, week_days)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, (now() AT TIME ZONE $15)::date), $13, $14, $16)
        RETURNING id`,
       [
-        room.id, v.taskArea, type, title, description, v.priority, v.assigneeId, v.autoAssign,
+        room.id, v.taskArea, type, title, description, v.priority, v.assigneeId, v.assigneeGroup, v.autoAssign,
         freq, uniqueHours, dateFrom, dateTo, req.user.id, HOTEL_TZ, weekDays,
       ]
     );
@@ -982,7 +1032,9 @@ app.patch('/api/tasks/:id', h(async (req, res) => {
         return res.status(400).json({ error: `${assignee.name} no pertenece al área de ${task.area}` });
       }
     }
-    await exec('UPDATE tasks SET assignee_id = $1 WHERE id = $2', [next, task.id]);
+    // Fijar (o quitar) una persona puntual deshace cualquier reparto por grupo previo:
+    // no tendría sentido conservar un grupo candidato junto a un dueño ya explícito.
+    await exec('UPDATE tasks SET assignee_id = $1, assignee_group = NULL WHERE id = $2', [next, task.id]);
     await recordAudit({
       entity: 'task', entityId: task.id, action: 'assignee',
       from: task.assignee_name ?? null, to: assignee?.name ?? null, actorId: req.user.id,
@@ -1015,6 +1067,18 @@ app.patch('/api/tasks/:id', h(async (req, res) => {
       if (!canSupervise(req.user, task.area)) return deny(res, 'Solo el jefe puede cancelar');
     } else if (!canWorkTask(req.user, task)) {
       return deny(res, 'Esta tarea no está asignada a ti');
+    }
+
+    // Nadie empieza a trabajar sin haber fichado turno. jefe/admin no fichan (no
+    // ejecutan trabajo de campo), así que quedan exentos de este chequeo.
+    if (status === 'en_curso' && req.user.role === 'empleado') {
+      const last = await one(
+        `SELECT kind FROM shift_logs WHERE user_id = $1 ORDER BY ended_at DESC LIMIT 1`,
+        [req.user.id]
+      );
+      if (last?.kind !== 'entrada') {
+        return res.status(400).json({ error: 'Debes iniciar turno antes de empezar una tarea' });
+      }
     }
 
     if (status === 'hecha') {
@@ -1461,7 +1525,7 @@ app.get('/api/lost-items', h(async (req, res) => {
   else if (req.query.status) clauses.push(`l.status = $${params.push(req.query.status)}`);
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await all(
-    `SELECT l.*, r.name AS room_name, u.name AS found_by_name
+    `SELECT l.*, r.name AS room_name, u.name AS reported_by_name
      FROM lost_items l
      LEFT JOIN rooms r ON r.id = l.room_id
      JOIN users u ON u.id = l.found_by
@@ -1469,21 +1533,79 @@ app.get('/api/lost-items', h(async (req, res) => {
      ORDER BY CASE l.status WHEN 'entregado' THEN 1 ELSE 0 END, l.created_at DESC`,
     params
   );
-  res.json(rows);
+  // El bucket es privado: cada foto necesita una URL firmada para poder verse.
+  const urls = await storage.createReadUrls(rows.filter((r) => r.photo).map((r) => r.photo));
+  res.json(rows.map((r) => ({ ...r, photo: r.photo ? (urls.get(r.photo) ?? null) : null })));
 }));
 
 app.post('/api/lost-items', h(async (req, res) => {
-  const { room_id = null, description, photo = null } = req.body || {};
+  const { room_id = null, name, description, condition = '', found_by_name, found_at } = req.body || {};
+  if (!name?.trim()) return res.status(400).json({ error: 'Falta el nombre del objeto' });
   if (!description?.trim()) return res.status(400).json({ error: 'Falta la descripción del objeto' });
+  if (!found_by_name?.trim()) return res.status(400).json({ error: 'Falta el nombre de quien lo encontró' });
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(found_at || '')) {
+    return res.status(400).json({ error: 'Hora de encuentro no válida (HH:MM)' });
+  }
   const roomId = room_id === null || room_id === undefined ? null : toId(room_id);
-  if (room_id != null && !(roomId && (await getRoom(roomId)))) {
+  const room = roomId ? await getRoom(roomId) : null;
+  if (room_id != null && !room) {
     return res.status(400).json({ error: 'Habitación no válida' });
   }
-  const item = await one(
-    'INSERT INTO lost_items (room_id, description, photo, found_by) VALUES ($1, $2, $3, $4) RETURNING *',
-    [roomId, description.trim(), photo, req.user.id]
+  const [hh, mm] = found_at.split(':');
+  const { found_at: foundAt } = await one(
+    `SELECT ((now() AT TIME ZONE $1)::date + make_interval(hours => $2::int, mins => $3::int))::timestamp AT TIME ZONE $1 AS found_at`,
+    [HOTEL_TZ, hh, mm]
   );
+  const item = await one(
+    `INSERT INTO lost_items (room_id, name, description, condition, found_by, found_by_name, found_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [roomId, name.trim(), description.trim(), condition.trim(), req.user.id, found_by_name.trim(), foundAt]
+  );
+  const leads = (await all(`SELECT id FROM users WHERE active AND role IN ('jefe','admin')`)).map((u) => u.id);
+  await notifyUsers(leads, {
+    type: 'lost_item', title: 'Objeto perdido registrado', body: `${name.trim()}${room ? ` · ${room.name}` : ''}`,
+    ref: { type: 'lost_item', id: item.id },
+  });
   res.status(201).json(item);
+}));
+
+// Subida de foto en dos pasos, igual que la evidencia de tareas: la app pide una URL
+// firmada, sube el binario directo al storage y confirma aquí. Solo quien reportó el
+// objeto (o un mando) puede adjuntarla, y solo mientras el caso sigue abierto.
+app.post('/api/lost-items/:id/photo-upload-url', h(async (req, res) => {
+  if (!storage.isConfigured()) return res.status(503).json({ error: 'El almacenamiento no está configurado' });
+  const id = toId(req.params.id);
+  const item = id && (await one('SELECT * FROM lost_items WHERE id = $1', [id]));
+  if (!item) return res.status(404).json({ error: 'Objeto no encontrado' });
+  if (item.found_by !== req.user.id && !isAtLeast(req.user, 'jefe')) return deny(res, 'No puedes editar este registro');
+  if (item.status !== 'guardado') return res.status(400).json({ error: 'El caso ya está cerrado' });
+
+  const { mime, size_bytes = 0 } = req.body || {};
+  if (!storage.isMimeAllowed('foto', mime)) return res.status(400).json({ error: `Formato no admitido: ${mime}` });
+  if (Number(size_bytes) > storage.MAX_BYTES.foto) {
+    return res.status(400).json({ error: `El fichero supera el máximo de ${Math.round(storage.MAX_BYTES.foto / 1024 / 1024)} MB` });
+  }
+  const storagePath = storage.buildPath({ lostItemId: item.id, mime });
+  const { url, method } = await storage.createUploadUrl(storagePath);
+  res.json({ upload_url: url, method, storage_path: storagePath });
+}));
+
+app.post('/api/lost-items/:id/photo', h(async (req, res) => {
+  const id = toId(req.params.id);
+  const item = id && (await one('SELECT * FROM lost_items WHERE id = $1', [id]));
+  if (!item) return res.status(404).json({ error: 'Objeto no encontrado' });
+  if (item.found_by !== req.user.id && !isAtLeast(req.user, 'jefe')) return deny(res, 'No puedes editar este registro');
+  if (item.status !== 'guardado') return res.status(400).json({ error: 'El caso ya está cerrado' });
+
+  const { storage_path } = req.body || {};
+  if (!storage_path?.trim() || !storage.pathMatchesTarget(storage_path.trim(), { lostItemId: item.id })) {
+    return res.status(400).json({ error: 'storage_path no corresponde a este objeto' });
+  }
+  if (!(await storage.fileExists(storage_path.trim()))) {
+    return res.status(400).json({ error: 'El fichero no se ha subido al almacenamiento' });
+  }
+  await exec('UPDATE lost_items SET photo = $1 WHERE id = $2', [storage_path.trim(), item.id]);
+  res.json(await one('SELECT * FROM lost_items WHERE id = $1', [item.id]));
 }));
 
 // Entregar un objeto a su dueño es una decisión con responsabilidad: del jefe para arriba.
@@ -1706,10 +1828,26 @@ app.patch('/api/notifications/read', h(async (req, res) => {
 app.post('/api/shift/start', h(async (req, res) => {
   if (req.user.role !== 'empleado') return deny(res, 'El fichaje de turno es solo para empleados');
   const log = await one(
-    `INSERT INTO shift_logs (user_id, kind) VALUES ($1, 'entrada') RETURNING *`,
+    `INSERT INTO shift_logs (user_id, kind, last_seen_at) VALUES ($1, 'entrada', now()) RETURNING *`,
     [req.user.id]
   );
   res.status(201).json(log);
+}));
+
+// Late de vida mientras el turno está abierto y la app en primer plano (cada 2 min,
+// ver app/src/lib/auth.tsx). Si estos dejan de llegar, el barrido de 5 min de más
+// abajo cierra el turno solo, usando la hora de este último ping como hora de salida
+// — así una app cerrada/matada en segundo plano no deja el turno abierto para siempre.
+app.post('/api/shift/heartbeat', h(async (req, res) => {
+  const row = await one(
+    `UPDATE shift_logs SET last_seen_at = now()
+     WHERE id = (SELECT id FROM shift_logs WHERE user_id = $1 ORDER BY ended_at DESC LIMIT 1)
+       AND kind = 'entrada'
+     RETURNING id`,
+    [req.user.id]
+  );
+  if (!row) return res.status(409).json({ error: 'No tienes un turno abierto' });
+  res.json({ ok: true });
 }));
 
 // Cualquier autenticado avisa su propia salida; no hay forma de registrarla por otro.
@@ -1930,9 +2068,13 @@ app.listen(PORT, () => {
   // arrancar y luego cada 5 min, sin depender de que alguien tenga la app abierta.
   sweepExpiredTasks().catch((err) => console.error('Error en el barrido de vencimiento:', err));
   runTaskSchedules().catch((err) => console.error('Error generando tareas programadas:', err));
+  sweepIdleShifts().catch((err) => console.error('Error cerrando turnos inactivos:', err));
+  purgeOldLostItems().catch((err) => console.error('Error purgando objetos perdidos:', err));
   setInterval(() => {
     sweepExpiredTasks().catch((err) => console.error('Error en el barrido de vencimiento:', err));
     runTaskSchedules().catch((err) => console.error('Error generando tareas programadas:', err));
+    sweepIdleShifts().catch((err) => console.error('Error cerrando turnos inactivos:', err));
+    purgeOldLostItems().catch((err) => console.error('Error purgando objetos perdidos:', err));
     for (const [key, a] of LOGIN_ATTEMPTS) {
       if (Date.now() - a.since >= LOGIN_WINDOW_MS) LOGIN_ATTEMPTS.delete(key);
     }

@@ -372,11 +372,18 @@ export interface LostItem {
   id: number;
   room_id: number | null;
   room_name?: string | null;
+  name: string;
   description: string;
+  condition: string;
   photo: string | null;
   status: 'guardado' | 'reclamado' | 'entregado';
   found_by: number;
+  // Nombre de quien físicamente encontró el objeto (escrito en el formulario, puede no
+  // coincidir con el dueño de la cuenta si es la genérica). reported_by_name es quien
+  // reportó desde su cuenta.
   found_by_name: string;
+  reported_by_name: string;
+  found_at: string | null;
   claimant: string;
   created_at: string;
   resolved_at: string | null;

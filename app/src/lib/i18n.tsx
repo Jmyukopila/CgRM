@@ -222,6 +222,7 @@ const dict = {
     // Detalle de tarea
     'task.checklist': 'Checklist',
     'task.startWork': 'Iniciar trabajo',
+    'task.needShift': 'Debes iniciar turno antes de empezar una tarea',
     'task.markDone': 'Marcar como hecha',
     'task.completeMissing': 'Completar (faltan {n})',
     'task.verify': 'Verificar y dar por buena',
@@ -345,6 +346,14 @@ const dict = {
     'lost.foundBy': 'Encontrado por',
     'lost.showAll': 'Mostrando todos · tocar para ver solo abiertos',
     'lost.showOpen': 'Mostrando abiertos · tocar para ver todos',
+    'lost.itemName': 'Nombre del objeto',
+    'lost.itemNamePlaceholder': 'Ej.: cargador de móvil',
+    'lost.condition': 'Condiciones',
+    'lost.conditionPlaceholder': 'Ej.: buen estado, con rayones...',
+    'lost.foundByLabel': 'Quién lo encontró',
+    'lost.foundByPlaceholder': 'Nombre de quien lo encontró',
+    'lost.foundAt': 'Hora de encuentro',
+    'lost.photoUploadFailed': 'El objeto se registró, pero la foto no se pudo subir.',
 
     // Inventario
     'inventory.title': 'Inventario',
@@ -381,6 +390,8 @@ const dict = {
     'users.showAll': 'Mostrando todos · tocar para ver solo activos',
     'users.showActive': 'Mostrando activos · tocar para ver todos',
     'users.inactive': 'Desactivado',
+    'users.search': 'Buscar por nombre o usuario',
+    'users.noArea': 'Sin área',
 
     // Panel de control
     'dashboard.title': 'Panel de control',
@@ -435,6 +446,8 @@ const dict = {
     'bulk.priority': 'Prioridad',
     'bulk.who': 'Quién lo hace',
     'bulk.autoAssign': 'Auto-asignar (equilibrado)',
+    'bulk.searchStaff': 'Buscar por nombre o usuario',
+    'bulk.groupOf': '{n} personas',
     'bulk.rooms': 'Habitaciones',
     'bulk.zones': 'Zonas comunes',
     'bulk.allRooms': 'Todas las habitaciones',
@@ -653,6 +666,7 @@ const dict = {
 
     'task.checklist': 'Checklist',
     'task.startWork': 'Start work',
+    'task.needShift': 'You must start your shift before beginning a task',
     'task.markDone': 'Mark as done',
     'task.completeMissing': 'Complete ({n} left)',
     'task.verify': 'Verify and approve',
@@ -769,6 +783,14 @@ const dict = {
     'lost.foundBy': 'Found by',
     'lost.showAll': 'Showing all · tap to show open only',
     'lost.showOpen': 'Showing open · tap to show all',
+    'lost.itemName': 'Item name',
+    'lost.itemNamePlaceholder': 'E.g.: phone charger',
+    'lost.condition': 'Condition',
+    'lost.conditionPlaceholder': 'E.g.: good shape, some scratches...',
+    'lost.foundByLabel': 'Who found it',
+    'lost.foundByPlaceholder': "Finder's name",
+    'lost.foundAt': 'Time found',
+    'lost.photoUploadFailed': 'The item was logged, but the photo failed to upload.',
 
     'inventory.title': 'Inventory',
     'inventory.new': 'New item',
@@ -803,6 +825,8 @@ const dict = {
     'users.showAll': 'Showing all · tap to show active only',
     'users.showActive': 'Showing active · tap to show all',
     'users.inactive': 'Deactivated',
+    'users.search': 'Search by name or username',
+    'users.noArea': 'No area',
 
     // Dashboard
     'dashboard.title': 'Control panel',
@@ -855,6 +879,8 @@ const dict = {
     'bulk.priority': 'Priority',
     'bulk.who': 'Who does it',
     'bulk.autoAssign': 'Auto-assign (balanced)',
+    'bulk.searchStaff': 'Search by name or username',
+    'bulk.groupOf': '{n} people',
     'bulk.rooms': 'Rooms',
     'bulk.zones': 'Common areas',
     'bulk.allRooms': 'All rooms',

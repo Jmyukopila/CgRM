@@ -43,11 +43,13 @@ export function isMimeAllowed(kind, mime) {
 }
 
 // Ruta dentro del bucket. El uuid evita colisiones y que se pueda adivinar una ruta ajena.
-export function buildPath({ taskId, taskItemId, incidentId, mime }) {
+export function buildPath({ taskId, taskItemId, incidentId, lostItemId, mime }) {
   const ext = EXT[mime] || 'bin';
   const scope = taskId
     ? `task/${taskId}/${taskItemId ? `item-${taskItemId}` : 'general'}`
-    : `incident/${incidentId}`;
+    : lostItemId
+      ? `lost/${lostItemId}`
+      : `incident/${incidentId}`;
   return `${scope}/${randomUUID()}.${ext}`;
 }
 
@@ -55,10 +57,12 @@ export function buildPath({ taskId, taskItemId, incidentId, mime }) {
 // target que se está registrando, para que un usuario autenticado no pueda anotar
 // bajo su tarea el fichero que subió otro (el UNIQUE de storage_path solo evita
 // duplicar el mismo registro, no ata el path a su destino).
-export function pathMatchesTarget(p, { taskId, taskItemId, incidentId }) {
+export function pathMatchesTarget(p, { taskId, taskItemId, incidentId, lostItemId }) {
   const prefix = taskId
     ? `task/${taskId}/${taskItemId ? `item-${taskItemId}` : 'general'}/`
-    : `incident/${incidentId}/`;
+    : lostItemId
+      ? `lost/${lostItemId}/`
+      : `incident/${incidentId}/`;
   return typeof p === 'string' && p.startsWith(prefix) && /^[0-9a-f-]{36}\.[a-z0-9]{2,5}$/i.test(p.slice(prefix.length));
 }
 

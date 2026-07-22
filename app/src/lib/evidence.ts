@@ -95,6 +95,32 @@ export async function uploadAsset(
   });
 }
 
+// La foto de un objeto perdido no es evidencia de tarea/incidencia (no hay tabla propia,
+// solo un campo `photo` en lost_items), así que usa su propio par de endpoints con la
+// misma mecánica de dos pasos (URL firmada, PUT directo al storage, confirmar).
+export async function uploadLostItemPhoto(
+  lostItemId: number,
+  asset: ImagePicker.ImagePickerAsset
+): Promise<void> {
+  const mime = asset.mimeType ?? DEFAULT_MIME.foto;
+  const { body, size } = await readBinary(asset.uri, asset.fileSize ?? 0);
+
+  const ticket = await api.post<UploadTicket>(`/api/lost-items/${lostItemId}/photo-upload-url`, {
+    mime,
+    size_bytes: size,
+  });
+
+  const doFetch = Platform.OS === 'web' ? fetch : expoFetch;
+  const res = await doFetch(ticket.upload_url, {
+    method: ticket.method,
+    headers: { 'Content-Type': mime },
+    body,
+  });
+  if (!res.ok) throw new ApiError(res.status, `No se pudo subir el fichero (${res.status})`);
+
+  await api.post(`/api/lost-items/${lostItemId}/photo`, { storage_path: ticket.storage_path });
+}
+
 // Captura, sube y registra. Devuelve null si el usuario cancela el selector.
 export async function captureEvidence(
   kind: EvidenceKind,

@@ -1,11 +1,16 @@
 // Sesión persistente (token JWT + usuario) con AsyncStorage.
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { ApiError, api, setToken, type Area, type User } from './api';
 import { clearCache } from './cache';
 import { registerPushToken } from './push';
 
 const STORAGE_KEY = 'cgrm.session';
+
+// Cada cuánto se manda el "sigo vivo" mientras el turno está abierto y la app en
+// primer plano. Si el servidor deja de recibirlos, cierra el turno solo (ver el
+// barrido de sweepIdleShifts en server/src/index.js) usando la hora del último ping.
+const HEARTBEAT_MS = 2 * 60 * 1000;
 
 interface AuthState {
   user: User | null;
@@ -15,6 +20,11 @@ interface AuthState {
   // evita mandar un rol que la API va a ignorar). Jefe/admin se dan de alta a mano.
   register: (data: { username: string; password: string; name: string; area: Area }) => Promise<void>;
   logout: () => Promise<void>;
+  // Turno del empleado: vive aquí (no en la pantalla de perfil) para que el heartbeat
+  // siga corriendo aunque el usuario navegue a otra pestaña.
+  clockedIn: boolean;
+  setClockedIn: (v: boolean) => void;
+  pingShift: () => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -22,6 +32,7 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [clockedIn, setClockedIn] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -59,6 +70,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
+  // Al tener sesión de empleado, se consulta si ya venía con turno abierto (p. ej.
+  // reabrir la app sin haber cerrado turno) para retomar el heartbeat donde quedó.
+  useEffect(() => {
+    if (!user || user.role !== 'empleado') {
+      setClockedIn(false);
+      return;
+    }
+    api.get<{ lastKind: string | null }>('/api/shift/today')
+      .then((r) => setClockedIn(r.lastKind === 'entrada'))
+      .catch(() => {});
+  }, [user]);
+
+  const pingShift = useCallback(() => {
+    if (clockedIn) api.post('/api/shift/heartbeat', {}).catch(() => {});
+  }, [clockedIn]);
+
+  useEffect(() => {
+    if (!clockedIn) return;
+    const id = setInterval(() => {
+      api.post('/api/shift/heartbeat', {}).catch((err) => {
+        // El servidor ya cerró el turno (barrido por inactividad, u otro dispositivo
+        // lo cerró): se refleja aquí sin tratarlo como un error de red cualquiera.
+        if (err instanceof ApiError && err.status === 409) setClockedIn(false);
+      });
+    }, HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [clockedIn]);
+
   const login = async (username: string, password: string) => {
     const res = await api.post<{ token: string; user: User }>('/api/auth/login', {
       username,
@@ -81,12 +120,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     setToken(null);
     setUser(null);
+    setClockedIn(false);
     await AsyncStorage.removeItem(STORAGE_KEY);
     await clearCache();
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, clockedIn, setClockedIn, pingShift }}>
       {children}
     </AuthContext.Provider>
   );

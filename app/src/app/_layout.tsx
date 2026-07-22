@@ -15,7 +15,7 @@ import { ThemeProvider, useTheme } from '../lib/theme-context';
 // evita que un deep-link o un refresco en web dispare peticiones sin token, o que la
 // primera pantalla parpadee de la fuente de sistema a Roboto.
 function Gate() {
-  const { loading } = useAuth();
+  const { loading, pingShift } = useAuth();
   const { colors, resolved } = useTheme();
   const [fontsLoaded] = useFonts({
     Roboto_500Medium,
@@ -26,14 +26,19 @@ function Gate() {
 
   // Warm-up del backend: al abrir y cada vez que la app vuelve a primer plano
   // (que es cuando Render pudo haberse dormido), para que el server ya esté
-  // despierto al enviar la primera petición.
+  // despierto al enviar la primera petición. Aprovecha el mismo cambio de estado
+  // para un heartbeat de turno extra: no decide el cierre (eso lo hace el barrido
+  // del servidor por ausencia de pings), solo afina la hora de cierre cuando el
+  // empleado cambia de app un momento y vuelve.
   useEffect(() => {
     warmUp();
+    pingShift();
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') warmUp();
+      pingShift();
     });
     return () => sub.remove();
-  }, []);
+  }, [pingShift]);
 
   if (loading || !fontsLoaded) {
     return (

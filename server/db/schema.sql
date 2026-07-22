@@ -390,3 +390,25 @@ ALTER TABLE shift_logs ADD CONSTRAINT shift_logs_kind_check CHECK (kind IN ('ent
 -- cuenta pero completada por otra persona del equipo (turnos compartidos). Obligatorio
 -- al marcar la tarea como hecha, se valida en el PATCH de /api/tasks/:id.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS done_by_name text;
+
+-- Objetos perdidos: formulario completo (nombre del objeto, condición, quién y a qué
+-- hora lo encontró) en vez de solo una descripción libre.
+ALTER TABLE lost_items ADD COLUMN IF NOT EXISTS name text NOT NULL DEFAULT '';
+ALTER TABLE lost_items ADD COLUMN IF NOT EXISTS condition text NOT NULL DEFAULT '';
+ALTER TABLE lost_items ADD COLUMN IF NOT EXISTS found_by_name text NOT NULL DEFAULT '';
+ALTER TABLE lost_items ADD COLUMN IF NOT EXISTS found_at timestamptz;
+
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_ref_type_check;
+ALTER TABLE notifications ADD CONSTRAINT notifications_ref_type_check
+  CHECK (ref_type IN ('task','incident','room','lost_item'));
+
+-- Turno abierto: última vez que la app confirmó estar viva (heartbeat). Sin esto no
+-- hay forma de distinguir "app cerrada sin avisar" de "turno abierto normal", y el
+-- cierre automático (ver el barrido de 5 min en index.js) no tendría de qué colgarse.
+ALTER TABLE shift_logs ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
+
+-- Reparto a un grupo elegido a mano (no toda el área, no una sola persona): la tarea
+-- queda sin asignee_id fijo pero solo estos usuarios pueden cogerla. NULL en ambas
+-- columnas conserva el comportamiento de siempre (cualquiera del área).
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_group integer[];
+ALTER TABLE task_schedules ADD COLUMN IF NOT EXISTS assignee_group integer[];

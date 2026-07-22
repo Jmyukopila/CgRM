@@ -190,7 +190,7 @@ function ChecklistRow({
 
 export default function TaskDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
+  const { user, clockedIn } = useAuth();
   const navigation = useNavigation();
   const { t } = useT();
   const { colors } = useTheme();
@@ -270,7 +270,13 @@ export default function TaskDetail() {
   const taskEvidence = evidence.filter((e) => e.task_item_id === null);
   const evidenceOf = (itemId: number) => evidence.filter((e) => e.task_item_id === itemId);
 
+  // jefe/admin no fichan turno; un empleado sin turno abierto no puede ni intentarlo.
+  const needsShift = user.role === 'empleado' && !clockedIn;
+
   const changeStatus = async (status: string, reviewNote?: string, doneBy?: string) => {
+    if (status === 'en_curso' && needsShift) {
+      return notify(t('common.error'), t('task.needShift'));
+    }
     setBusy(true);
     try {
       // La respuesta del PATCH ya trae la tarea completa (con su checklist): no hace
@@ -424,7 +430,15 @@ export default function TaskDetail() {
 
         <View style={{ gap: 10, marginTop: 24 }}>
           {['pendiente', 'rechazada', 'vencida', 'impugnada'].includes(task.status) && canWork && (
-            <Button label={t('task.startWork')} onPress={() => changeStatus('en_curso')} loading={busy} />
+            <>
+              <Button
+                label={t('task.startWork')}
+                onPress={() => changeStatus('en_curso')}
+                loading={busy}
+                disabled={needsShift}
+              />
+              {needsShift && <Text style={s.reviewHint}>{t('task.needShift')}</Text>}
+            </>
           )}
           {task.status === 'en_curso' && canWork && (
             <>
