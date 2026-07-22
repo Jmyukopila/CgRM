@@ -14,7 +14,7 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import { Button, Chip, Empty, ErrorState, Pill, Screen, SectionTitle, Skeleton, notify } from '../components/ui';
+import { Button, Empty, ErrorState, Pill, Screen, Skeleton, notify } from '../components/ui';
 import { pickAsset, uploadLostItemPhoto } from '../lib/evidence';
 import { api, type LostItem, type Room } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -29,12 +29,22 @@ const STATUS_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   entregado: 'checkmark-done-outline',
 };
 
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const MINUTES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
-
 function pad(n: number) {
   return String(n).padStart(2, '0');
 }
+
+// El usuario solo puede teclear dígitos: el ":" se inserta solo, así nunca queda una
+// hora a medio escribir en un formato raro.
+function formatTimeInput(raw: string) {
+  const digits = raw.replace(/\D/g, '').slice(0, 4);
+  return digits.length <= 2 ? digits : `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
+
+function isValidTime(v: string) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+}
+
+type LocationMode = 'zone' | 'room' | null;
 
 function emptyForm(name: string) {
   const now = new Date();
@@ -43,9 +53,10 @@ function emptyForm(name: string) {
     description: '',
     condition: '',
     foundByName: name,
-    roomId: null as number | null,
-    hour: now.getHours(),
-    minute: Math.floor(now.getMinutes() / 5) * 5,
+    locationMode: null as LocationMode,
+    zoneRoomId: null as number | null,
+    roomNumber: '',
+    foundAtText: `${pad(now.getHours())}:${pad(Math.floor(now.getMinutes() / 5) * 5)}`,
     asset: null as ImagePicker.ImagePickerAsset | null,
   };
 }
@@ -62,6 +73,7 @@ export default function ObjetosPerdidos() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
   const [form, setForm] = useState(() => emptyForm(user?.name ?? ''));
   const [creating, setCreating] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -94,6 +106,25 @@ export default function ObjetosPerdidos() {
     }, [load])
   );
 
+  const zones = useMemo(() => rooms.filter((r) => r.type === 'zona_comun'), [rooms]);
+  const privateRooms = useMemo(() => rooms.filter((r) => r.type === 'privada'), [rooms]);
+
+  const matchedRoom = useMemo(() => {
+    if (form.locationMode === 'zone') return rooms.find((r) => r.id === form.zoneRoomId) ?? null;
+    if (form.locationMode === 'room') {
+      const q = form.roomNumber.trim().toLowerCase();
+      return q ? privateRooms.find((r) => r.name.toLowerCase() === q) ?? null : null;
+    }
+    return null;
+  }, [form.locationMode, form.zoneRoomId, form.roomNumber, rooms, privateRooms]);
+
+  const locationLabel =
+    form.locationMode === 'zone'
+      ? zones.find((z) => z.id === form.zoneRoomId)?.name ?? t('lost.pickLocation')
+      : form.locationMode === 'room'
+        ? t('lost.roomOption')
+        : t('lost.pickLocation');
+
   const openModal = () => {
     setForm(emptyForm(user?.name ?? ''));
     setOpen(true);
@@ -108,24 +139,30 @@ export default function ObjetosPerdidos() {
     }
   };
 
-  const valid = form.name.trim() && form.description.trim() && form.foundByName.trim();
+  const timeValid = isValidTime(form.foundAtText);
+  const valid =
+    !!form.name.trim() &&
+    !!form.description.trim() &&
+    !!form.foundByName.trim() &&
+    !!matchedRoom &&
+    timeValid;
 
   const create = async () => {
-    if (!valid) return;
+    if (!valid || !matchedRoom) return;
     setCreating(true);
     try {
       const item = await api.post<LostItem>('/api/lost-items', {
-        room_id: form.roomId,
+        room_id: matchedRoom.id,
         name: form.name.trim(),
         description: form.description.trim(),
         condition: form.condition.trim(),
         found_by_name: form.foundByName.trim(),
-        found_at: `${pad(form.hour)}:${pad(form.minute)}`,
+        found_at: form.foundAtText,
       });
       if (form.asset) {
         try {
           await uploadLostItemPhoto(item.id, form.asset);
-        } catch (e: any) {
+        } catch {
           notify(t('common.error'), t('lost.photoUploadFailed'));
         }
       }
@@ -146,11 +183,6 @@ export default function ObjetosPerdidos() {
       notify(t('common.error'), e.message);
     }
   };
-
-  const roomName = useMemo(() => {
-    const m = new Map(rooms.map((r) => [r.id, r.name]));
-    return (id: number | null) => (id ? m.get(id) : null);
-  }, [rooms]);
 
   if (!loaded) {
     return (
@@ -177,10 +209,10 @@ export default function ObjetosPerdidos() {
     <Screen>
       <View style={s.screen}>
         <View style={s.headerRow}>
+          <Button label={t('lost.new')} icon="add-circle-outline" onPress={openModal} />
           <Pressable onPress={() => setShowAll((v) => !v)} style={s.toggle} hitSlop={8}>
             <Text style={s.toggleText}>{showAll ? t('lost.showAll') : t('lost.showOpen')}</Text>
           </Pressable>
-          <Button label={t('lost.new')} icon="add-circle-outline" onPress={openModal} />
         </View>
 
         {items.length === 0 ? (
@@ -244,7 +276,7 @@ export default function ObjetosPerdidos() {
                     <Ionicons name="image-outline" size={22} color={colors.inkFaint} />
                   </View>
                 )}
-                <View style={{ gap: 6 }}>
+                <View style={{ gap: 6, flex: 1 }}>
                   <Button label={t('newIncident.camera')} kind="ghost" icon="camera-outline" onPress={() => pickPhoto('camara')} />
                   <Button label={t('evidence.gallery')} kind="ghost" icon="images-outline" onPress={() => pickPhoto('galeria')} />
                 </View>
@@ -287,39 +319,76 @@ export default function ObjetosPerdidos() {
               />
 
               <Text style={s.label}>{t('lost.room')}</Text>
-              <View style={s.chips}>
-                <Chip label={t('common.optional')} active={form.roomId === null} onPress={() => setForm((f) => ({ ...f, roomId: null }))} />
-                {rooms.map((r) => (
-                  <Chip key={r.id} label={r.name} active={form.roomId === r.id} onPress={() => setForm((f) => ({ ...f, roomId: r.id }))} />
-                ))}
-              </View>
+              <Pressable onPress={() => setLocationOpen(true)} style={s.selectBox}>
+                <Text style={[s.selectBoxText, !form.locationMode && { color: colors.inkFaint }]} numberOfLines={1}>
+                  {locationLabel}
+                </Text>
+                <Ionicons name="chevron-down" size={16} color={colors.inkSoft} />
+              </Pressable>
+              {form.locationMode === 'room' && (
+                <>
+                  <TextInput
+                    style={s.input}
+                    placeholder={t('lost.roomNumberPlaceholder')}
+                    placeholderTextColor={colors.inkFaint}
+                    keyboardType="number-pad"
+                    value={form.roomNumber}
+                    onChangeText={(v) => setForm((f) => ({ ...f, roomNumber: v }))}
+                  />
+                  {form.roomNumber.trim().length > 0 && !matchedRoom && (
+                    <Text style={s.errorText}>{t('lost.roomNumberInvalid')}</Text>
+                  )}
+                </>
+              )}
 
               <Text style={s.label}>{t('lost.foundAt')}</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.timeRow}>
-                {HOURS.map((h) => (
-                  <Pressable
-                    key={h}
-                    onPress={() => setForm((f) => ({ ...f, hour: h }))}
-                    style={[s.timeChip, form.hour === h && s.timeChipActive]}
-                  >
-                    <Text style={[s.timeChipText, form.hour === h && s.timeChipTextActive]}>{pad(h)}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.timeRow}>
-                {MINUTES.map((m) => (
-                  <Pressable
-                    key={m}
-                    onPress={() => setForm((f) => ({ ...f, minute: m }))}
-                    style={[s.timeChip, form.minute === m && s.timeChipActive]}
-                  >
-                    <Text style={[s.timeChipText, form.minute === m && s.timeChipTextActive]}>{pad(m)}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-              <Text style={s.timePreview}>{pad(form.hour)}:{pad(form.minute)}</Text>
+              <TextInput
+                style={s.input}
+                placeholder="00:00"
+                placeholderTextColor={colors.inkFaint}
+                keyboardType="number-pad"
+                maxLength={5}
+                value={form.foundAtText}
+                onChangeText={(v) => setForm((f) => ({ ...f, foundAtText: formatTimeInput(v) }))}
+              />
+              {form.foundAtText.length > 0 && !timeValid && (
+                <Text style={s.errorText}>{t('lost.timeInvalid')}</Text>
+              )}
 
               <Button label={t('lost.new')} onPress={create} loading={creating} disabled={!valid} />
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={locationOpen} transparent animationType="fade" onRequestClose={() => setLocationOpen(false)}>
+        <Pressable style={s.backdrop} onPress={() => setLocationOpen(false)}>
+          <Pressable style={s.panel} onPress={() => {}}>
+            <Text style={s.panelTitle}>{t('lost.room')}</Text>
+            <ScrollView contentContainerStyle={{ gap: 2 }}>
+              <Pressable
+                style={s.locationRow}
+                onPress={() => {
+                  setForm((f) => ({ ...f, locationMode: 'room', zoneRoomId: null }));
+                  setLocationOpen(false);
+                }}
+              >
+                <Ionicons name="bed-outline" size={18} color={colors.inkSoft} />
+                <Text style={s.locationRowText}>{t('lost.roomOption')}</Text>
+              </Pressable>
+              {zones.map((z) => (
+                <Pressable
+                  key={z.id}
+                  style={s.locationRow}
+                  onPress={() => {
+                    setForm((f) => ({ ...f, locationMode: 'zone', zoneRoomId: z.id, roomNumber: '' }));
+                    setLocationOpen(false);
+                  }}
+                >
+                  <Ionicons name="location-outline" size={18} color={colors.inkSoft} />
+                  <Text style={s.locationRowText}>{z.name}</Text>
+                </Pressable>
+              ))}
             </ScrollView>
           </Pressable>
         </Pressable>
@@ -332,9 +401,7 @@ function makeStyles(colors: Colors) {
   return {
     screen: { flex: 1 } as ViewStyle,
     headerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
+      gap: 8,
       paddingHorizontal: 16,
       paddingTop: 12,
       paddingBottom: 8,
@@ -350,8 +417,20 @@ function makeStyles(colors: Colors) {
       color: colors.ink,
       backgroundColor: colors.surface,
     } as TextStyle,
-    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 } as ViewStyle,
-    toggle: { minHeight: 44, justifyContent: 'center' } as ViewStyle,
+    errorText: { fontSize: 12, color: colors.danger, fontWeight: '600' } as TextStyle,
+    selectBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1,
+      borderColor: colors.hairline,
+      borderRadius: 10,
+      minHeight: 48,
+      paddingHorizontal: 14,
+      backgroundColor: colors.surface,
+    } as ViewStyle,
+    selectBoxText: { flex: 1, fontSize: 16, color: colors.ink } as TextStyle,
+    toggle: { minHeight: 32, justifyContent: 'center' } as ViewStyle,
     toggleText: { fontSize: 12, color: colors.inkSoft, fontWeight: '600' } as TextStyle,
     card: {
       backgroundColor: colors.surface,
@@ -400,19 +479,14 @@ function makeStyles(colors: Colors) {
       alignItems: 'center',
       justifyContent: 'center',
     } as ViewStyle,
-    timeRow: { flexDirection: 'row' } as ViewStyle,
-    timeChip: {
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: radius.pill,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      marginRight: 6,
-      backgroundColor: colors.surfaceSunken,
+    locationRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairline,
     } as ViewStyle,
-    timeChipActive: { backgroundColor: colors.ink, borderColor: 'transparent' } as ViewStyle,
-    timeChipText: { fontSize: 13, fontWeight: '600', color: colors.ink } as TextStyle,
-    timeChipTextActive: { color: colors.onAccent } as TextStyle,
-    timePreview: { fontSize: 13, color: colors.inkSoft, fontWeight: '700', textAlign: 'center' } as TextStyle,
+    locationRowText: { fontSize: 15, fontWeight: '600', color: colors.ink } as TextStyle,
   };
 }

@@ -37,7 +37,7 @@ Quick reference for CgRM (Hotel Casa Gracia operations app). For full context, s
 
 ## Deployment
 
-- **Web**: Vercel (push to `main`). See `app/vercel.json` (uses `npx expo export -p web`, rewrites for dynamic routes).
+- **Web**: Vercel. `app/vercel.json` (uses `npx expo export -p web`, rewrites for dynamic routes). **Git auto-deploy on push to `main` is not reliable** — after pushing, always also run `cd app && vercel --prod` (already linked, logged in as `jasenovichyukopila`) and confirm by checking the served JS bundle hash changed.
 - **Server**: Render `cgrm.onrender.com` (push to `master`). Ensure `NODE_ENV=production`, `DATABASE_URL` (Neon), `CGRM_JWT_SECRET` set.
 - **APK**: Use `/apk-build` or `BUILD-APK.md`. Pospuesto; `app/android/` ready when needed.
 
