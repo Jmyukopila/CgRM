@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Text, TextStyle, View, ViewStyle } from 'react-native';
+import { ScrollView, Text, TextStyle, View, ViewStyle } from 'react-native';
 import { AnimatedPressable, Avatar, Button, Card, confirmAction, notify, Screen, SegmentedControl } from '../../components/ui';
 import { api, API_URL } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -92,7 +92,7 @@ export default function Perfil() {
 
   return (
     <Screen slideFrom="down">
-      <View style={s.screen}>
+      <ScrollView style={s.screen} contentContainerStyle={s.content}>
         <Card style={s.identityCard}>
           <Avatar name={user.name} color={roleColor(colors, user.role)} size={56} />
           <View style={{ flex: 1 }}>
@@ -168,23 +168,24 @@ export default function Perfil() {
           </Card>
         )}
 
-        {clockedIn ? (
-          <Button
-            label={t('profile.endShift')}
-            kind="ghost"
-            icon="log-out-outline"
-            loading={shiftBusy}
-            onPress={endShift}
-          />
-        ) : (
-          <Button
-            label={t('profile.startShift')}
-            kind="ghost"
-            icon="log-in-outline"
-            loading={shiftBusy}
-            onPress={startShift}
-          />
-        )}
+        {user.role === 'empleado' &&
+          (clockedIn ? (
+            <Button
+              label={t('profile.endShift')}
+              kind="ghost"
+              icon="log-out-outline"
+              loading={shiftBusy}
+              onPress={endShift}
+            />
+          ) : (
+            <Button
+              label={t('profile.startShift')}
+              kind="ghost"
+              icon="log-in-outline"
+              loading={shiftBusy}
+              onPress={startShift}
+            />
+          ))}
 
         <Button
           label={t('profile.logout')}
@@ -195,14 +196,15 @@ export default function Perfil() {
             await logout();
           }}
         />
-      </View>
+      </ScrollView>
     </Screen>
   );
 }
 
 function makeStyles(colors: Colors) {
   return {
-    screen: { flex: 1, padding: 16, gap: 16 } as ViewStyle,
+    screen: { flex: 1 } as ViewStyle,
+    content: { padding: 16, paddingBottom: 32, gap: 16 } as ViewStyle,
     identityCard: { flexDirection: 'row', alignItems: 'center', gap: 14 } as ViewStyle,
     name: { fontSize: 20, fontWeight: '800', color: colors.ink } as TextStyle,
     role: { fontSize: 13, fontWeight: '600', color: colors.accent, marginTop: 2, marginBottom: 4 } as TextStyle,

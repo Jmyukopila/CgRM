@@ -1,0 +1,24 @@
+{
+  "buildCommand": "npx expo export -p web",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/room/:id", "destination": "/room/[id].html" },
+    { "source": "/task/:id", "destination": "/task/[id].html" },
+    { "source": "/incident/:id", "destination": "/incident/[id].html" },
+    { "source": "/login", "destination": "/login.html" },
+    { "source": "/perfil", "destination": "/perfil.html" },
+    { "source": "/tareas", "destination": "/tareas.html" },
+    { "source": "/registro", "destination": "/registro.html" },
+    { "source": "/reportes", "destination": "/reportes.html" },
+    { "source": "/usuarios", "destination": "/usuarios.html" },
+    { "source": "/revision", "destination": "/revision.html" },
+    { "source": "/dashboard", "destination": "/dashboard.html" },
+    { "source": "/inventario", "destination": "/inventario.html" },
+    { "source": "/programadas", "destination": "/programadas.html" },
+    { "source": "/incidencias", "destination": "/incidencias.html" },
+    { "source": "/notificaciones", "destination": "/notificaciones.html" },
+    { "source": "/nueva-incidencia", "destination": "/nueva-incidencia.html" },
+    { "source": "/objetos-perdidos", "destination": "/objetos-perdidos.html" },
+    { "source": "/nueva-tarea-masiva", "destination": "/nueva-tarea-masiva.html" }
+  ]
+}

@@ -15,8 +15,9 @@ const RANK = { empleado: 1, jefe: 2, admin: 3 };
 
 export const isAtLeast = (user, role) => (RANK[user.role] ?? 0) >= RANK[role];
 
-// Jefe y admin cruzan todas las áreas; empleado y líder viven encerrados en la suya.
-export const seesAllAreas = (user) => isAtLeast(user, 'jefe');
+// Jefe y admin cruzan todas las áreas; un empleado sin área asignada (cuenta genérica)
+// también, ya que no tiene una sola área en la que "vivir encerrado".
+export const seesAllAreas = (user) => isAtLeast(user, 'jefe') || user.area == null;
 export const inArea = (user, area) => seesAllAreas(user) || user.area === area;
 
 // Ejecutar el trabajo: el asignado siempre; cualquiera del área si nadie la ha cogido

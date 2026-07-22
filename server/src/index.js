@@ -122,8 +122,9 @@ async function runTaskSchedules() {
     const room = await getRoom(s.room_id);
     if (!room) continue;
     // Reparto equilibrado en cada pasada, no el que tocaba al crear la programación:
-    // quien tenga menos carga HOY se lleva la instancia de hoy.
-    const assigneeId = s.auto_assign ? await pickLeastLoadedAssignee(s.area) : s.assignee_id;
+    // quien tenga menos carga HOY se lleva la instancia de hoy. Si la programación no
+    // fijó a nadie, tampoco queda huérfana: se reparte igual que con auto_assign.
+    const assigneeId = s.assignee_id ?? (await pickLeastLoadedAssignee(s.area));
     const taskId = await createTask({
       room, area: s.area, type: s.type, title: s.title, description: s.description,
       priority: s.priority, assignee_id: assigneeId, createdBy: s.created_by,
@@ -517,10 +518,12 @@ app.get('/api/tasks', h(async (req, res) => {
 
   if (req.query.mine === '1') {
     const p = params.push(req.user.id);
-    // "Mías" incluye lo que está sin coger de mi área: es trabajo que me toca a mí.
-    clauses.push(seesAllAreas(req.user)
-      ? `t.assignee_id = $${p}`
-      : `(t.assignee_id = $${p} OR t.assignee_id IS NULL)`);
+    // "Mías" incluye lo que está sin coger (en cualquier área que vea el empleado,
+    // tenga o no área fija): es trabajo que le toca. Jefe/admin no "cogen" trabajo
+    // suelto, así que para ellos "mías" es solo lo asignado a su nombre.
+    clauses.push(req.user.role === 'empleado'
+      ? `(t.assignee_id = $${p} OR t.assignee_id IS NULL)`
+      : `t.assignee_id = $${p}`);
   }
   if (req.query.room_id) {
     clauses.push(`t.room_id = $${params.push(toId(req.query.room_id))}`);
@@ -699,10 +702,12 @@ async function createTask({
 // para que el resultado sea reproducible. Si el área no tiene empleados activos, null
 // (la tarea queda sin asignar y cae al reparto manual de siempre).
 async function pickLeastLoadedAssignee(area) {
+  // Un empleado sin área (cuenta genérica) trabaja cualquier área, así que entra
+  // en el reparto de todas ellas, no solo de la suya.
   const row = await one(
     `SELECT u.id FROM users u
      LEFT JOIN tasks t ON t.assignee_id = u.id AND t.status = ANY($2)
-     WHERE u.area = $1 AND u.role = 'empleado' AND u.active
+     WHERE (u.area = $1 OR u.area IS NULL) AND u.role = 'empleado' AND u.active
      GROUP BY u.id
      ORDER BY COUNT(t.id) ASC, u.id ASC
      LIMIT 1`,
@@ -761,7 +766,9 @@ app.post('/api/tasks', requireRank('jefe'), h(async (req, res) => {
     if (items && save_checklist) await setRoomChecklist(room.id, type, items);
     // Recalculado en cada vuelta (no una vez para todo el lote): así una tanda de 8
     // habitaciones se reparte entre el equipo en vez de caer entera sobre el mismo.
-    const assigneeId = v.autoAssign ? await pickLeastLoadedAssignee(v.taskArea) : v.assigneeId;
+    // Si no se eligió a nadie ("Sin asignar" o 'auto'), nunca queda huérfana: se reparte
+    // sola al empleado con menos carga del área, así siempre le llega a alguien.
+    const assigneeId = v.assigneeId ?? (await pickLeastLoadedAssignee(v.taskArea));
     taskIds.push(
       await createTask({
         room, area: v.taskArea, type, title, description, priority: v.priority,
@@ -1358,8 +1365,8 @@ app.post('/api/incidents', h(async (req, res) => {
 
   if (blocks_room) await setRoomStatus(room, 'bloqueada', req.user.id);
 
-  // Toda incidencia genera su orden de trabajo en el área que la resuelve (sin asignar:
-  // la coge el equipo).
+  // Toda incidencia genera su orden de trabajo en el área que la resuelve, repartida
+  // igual que cualquier otra tarea (nunca queda huérfana sin que le llegue a nadie).
   const taskType = incArea === 'mantenimiento' ? 'mantenimiento' : 'general';
   await createTask({
     room,
@@ -1368,7 +1375,7 @@ app.post('/api/incidents', h(async (req, res) => {
     title: `Avería · ${room.name}: ${title.trim()}`,
     description,
     priority,
-    assignee_id: null,
+    assignee_id: await pickLeastLoadedAssignee(incArea),
     incident_id: incId,
     createdBy: req.user.id,
   });
@@ -1376,7 +1383,7 @@ app.post('/api/incidents', h(async (req, res) => {
   if (priority === 'urgente' || blocks_room) {
     const recipients = (
       await all(
-        `SELECT id FROM users WHERE active AND (role IN ('jefe','admin') OR area = $1)`,
+        `SELECT id FROM users WHERE active AND (role IN ('jefe','admin') OR area = $1 OR area IS NULL)`,
         [incArea]
       )
     ).map((u) => u.id);
@@ -1695,7 +1702,9 @@ app.patch('/api/notifications/read', h(async (req, res) => {
 // --- Entrada / fin de turno ---------------------------------------------------
 
 // Cualquier autenticado avisa su propia llegada; no hay forma de registrarla por otro.
+// Fichar turno es cosa de personal operativo: jefe/admin no reportan entrada/salida.
 app.post('/api/shift/start', h(async (req, res) => {
+  if (req.user.role !== 'empleado') return deny(res, 'El fichaje de turno es solo para empleados');
   const log = await one(
     `INSERT INTO shift_logs (user_id, kind) VALUES ($1, 'entrada') RETURNING *`,
     [req.user.id]
@@ -1705,6 +1714,7 @@ app.post('/api/shift/start', h(async (req, res) => {
 
 // Cualquier autenticado avisa su propia salida; no hay forma de registrarla por otro.
 app.post('/api/shift/end', h(async (req, res) => {
+  if (req.user.role !== 'empleado') return deny(res, 'El fichaje de turno es solo para empleados');
   const log = await one(
     `INSERT INTO shift_logs (user_id, kind) VALUES ($1, 'salida') RETURNING *`,
     [req.user.id]

@@ -13,7 +13,9 @@ const RANK: Record<Role, number> = { empleado: 1, jefe: 2, admin: 3 };
 export const isAtLeast = (user: User | null, role: Role) =>
   !!user && RANK[user.role] >= RANK[role];
 
-export const seesAllAreas = (user: User | null) => isAtLeast(user, 'jefe');
+// Jefe y admin cruzan todas las áreas; un empleado sin área asignada (cuenta
+// genérica) también, ya que no tiene una sola área en la que "vivir encerrado".
+export const seesAllAreas = (user: User | null) => isAtLeast(user, 'jefe') || (!!user && user.area == null);
 
 export const inArea = (user: User | null, area: Area) =>
   seesAllAreas(user) || (!!user && user.area === area);

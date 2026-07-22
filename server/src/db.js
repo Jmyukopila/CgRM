@@ -188,62 +188,6 @@ const CHECKLISTS = {
   ],
 };
 
-// Checklists propias de un sitio concreto, por encima de la plantilla de su tipo: lo
-// que hay que hacer en la piscina no se deduce de "es una zona común". Se siembran
-// sobre room_checklist_items al dar de alta la habitación; desde ahí las edita el
-// líder desde la app y este catálogo ya no las vuelve a tocar.
-const ROOM_CHECKLISTS = {
-  'Piscina|limpieza': [
-    ev('Recoger hojas y fondo con el limpiafondos'),
-    'Vaciar y limpiar los skimmers',
-    ev('Medir cloro y pH, corregir dosificación', 'foto'),
-    ev('Bordes, ducha y tumbonas limpios'),
-    'Ordenar cojines y mobiliario',
-  ],
-  'Piscina|mantenimiento': [
-    ev('Presión del filtro dentro de rango', 'foto'),
-    'Revisar bomba y depuradora (ruido, fugas)',
-    'Comprobar nivel de agua y llenado automático',
-    ev('Cascada y focos funcionando', 'video'),
-  ],
-  'Terraza|limpieza': [
-    ev('Barrer y fregar el suelo hidráulico'),
-    ev('Mesas, sillas y barandilla limpias'),
-    'Regar y limpiar las jardineras',
-    'Revisar la iluminación de la pérgola',
-    'Vaciar papeleras y ceniceros',
-  ],
-  'Desayunador|limpieza': [
-    ev('Mesas y superficies desinfectadas'),
-    ev('Suelo barrido y fregado'),
-    'Reponer servilletas, azúcar y condimentos',
-    'Vaciar papeleras y sacar la basura',
-    'Dejar el montaje del desayuno listo',
-  ],
-  'Cocina|limpieza': [
-    ev('Superficies y planchas limpias y desinfectadas'),
-    ev('Suelo y desagües limpios'),
-    'Sacar basura y reciclaje',
-    ev('Cierre: gas, campana y luces apagados', 'video'),
-  ],
-  'Lavandería|limpieza': [
-    'Vaciar filtros de las secadoras',
-    ev('Suelo y superficies limpios'),
-    'Ordenar la ropa limpia y las estanterías',
-    'Registrar mermas o prendas dañadas',
-  ],
-  // La especialidad de cada zona con área propia: su trabajo "de oficio", que reutiliza
-  // el contenido de la plantilla de tipo pero solo se cuelga de la zona que le toca.
-  'Recepción|recepcion': CHECKLISTS['zona_comun|recepcion'],
-  'Cocina|cocina': CHECKLISTS['zona_comun|cocina'],
-  'Lavandería|lavanderia': CHECKLISTS['zona_comun|lavanderia'],
-};
-
-// Trabajo que puede darse en cualquier zona común, se llame como se llame. El resto de
-// tipos (recepción, cocina, lavandería) solo se siembra en su zona concreta vía
-// ROOM_CHECKLISTS, no en todas: la piscina no tiene checklist de cocina.
-const ZONE_UNIVERSAL_TYPES = ['limpieza', 'inspeccion', 'mantenimiento'];
-
 // El catálogo real de Casa Gracia: 8 habitaciones (todas privadas) y las zonas donde
 // también se trabaja. Los nombres son la clave con la que la app localiza la foto real
 // de cada sitio (app/src/lib/room-photos.ts): renombrar una aquí deja su tarjeta sin foto.
@@ -266,20 +210,12 @@ const ROOMS = [
 
 // [usuario, contraseña, nombre, rol, área]. El área solo aplica a empleado:
 // jefe y admin no viven en ninguna, las cruzan todas.
+// Solo 2 cuentas: el admin (dueño de todo) y un empleado genérico sin área fija
+// (ve y trabaja todas las áreas, ver seesAllAreas en permissions.js). El resto del
+// personal nombrado se retiró a propósito.
 const USERS = [
-  ['admin', '1234', 'Admin (sistema)', 'admin', null],
-  ['jefe', 'gracia123', 'Elena (Dirección)', 'jefe', null],
-  ['gobernanta', 'gracia123', 'Carmen (Gobernanta)', 'empleado', 'limpieza'],
-  ['maria', 'gracia123', 'María (Limpieza)', 'empleado', 'limpieza'],
-  ['lucia', 'gracia123', 'Lucía (Limpieza)', 'empleado', 'limpieza'],
-  ['jordi', 'gracia123', 'Jordi (Jefe de Mantenimiento)', 'empleado', 'mantenimiento'],
-  ['pedro', 'gracia123', 'Pedro (Mantenimiento)', 'empleado', 'mantenimiento'],
-  ['sofia', 'gracia123', 'Sofía (Jefa de Recepción)', 'empleado', 'recepcion'],
-  ['daniel', 'gracia123', 'Daniel (Recepción)', 'empleado', 'recepcion'],
-  ['marta', 'gracia123', 'Marta (Chef)', 'empleado', 'cocina'],
-  ['rosa', 'gracia123', 'Rosa (Lavandería)', 'empleado', 'lavanderia'],
-  // Cuenta local de pruebas (empleado raso, área limpieza) para verificar el flujo sin usar a nadie del equipo real.
-  ['empleado', 'empleado123', 'Empleado de prueba', 'empleado', 'limpieza'],
+  ['administradorcg', '1234', 'Administrador', 'admin', null],
+  ['empleado', 'empleado123', 'Empleado', 'empleado', null],
 ];
 
 const INVENTORY = [
@@ -314,46 +250,6 @@ export async function seed({ force = false } = {}) {
     client.release();
   }
   return true;
-}
-
-const TASK_TYPES = ['limpieza', 'mantenimiento', 'inspeccion', 'recepcion', 'cocina', 'lavanderia'];
-
-// Siembra la checklist propia de un sitio: la específica de ese sitio si existe
-// (ROOM_CHECKLISTS) y, si no, la plantilla de su tipo. Solo rellena los tipos de
-// trabajo que aún no tienen ni un punto propio: una checklist ya editada desde la app
-// no se pisa nunca, y por eso `npm run sync` es seguro contra producción.
-async function seedRoomChecklists(client, roomId, name, type) {
-  for (const taskType of TASK_TYPES) {
-    // La checklist específica del sitio manda; si no la hay, cae a la plantilla del tipo
-    // de habitación, pero en las zonas comunes solo para el trabajo universal (una zona
-    // no hereda el "recepción/cocina/lavandería" salvo que sea esa zona, vía ROOM_CHECKLISTS).
-    let items = ROOM_CHECKLISTS[`${name}|${taskType}`];
-    if (!items && (type !== 'zona_comun' || ZONE_UNIVERSAL_TYPES.includes(taskType))) {
-      items = CHECKLISTS[`${type}|${taskType}`];
-    }
-    if (!items) continue;
-
-    const { rows } = await client.query(
-      'SELECT 1 FROM room_checklist_items WHERE room_id = $1 AND task_type = $2 LIMIT 1',
-      [roomId, taskType]
-    );
-    if (rows.length > 0) continue;
-
-    for (const [i, item] of items.entries()) {
-      const it = typeof item === 'string' ? { text: item } : item;
-      await client.query(
-        `INSERT INTO room_checklist_items
-           (room_id, task_type, text, position, requires_evidence, evidence_kind, min_evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          roomId, taskType, it.text, i,
-          it.requires_evidence ?? false,
-          it.evidence_kind ?? 'cualquiera',
-          it.min_evidence ?? 1,
-        ]
-      );
-    }
-  }
 }
 
 // Retira las habitaciones que ya no están en el catálogo (el modelo ficticio anterior:
@@ -405,13 +301,14 @@ async function syncCatalog(client, { fresh = false } = {}) {
   }
 
   for (const [name, floor, type] of ROOMS) {
-    const { rows } = await client.query(
+    await client.query(
       `INSERT INTO rooms (name, floor, type) VALUES ($1, $2, $3)
-       ON CONFLICT (name) DO UPDATE SET floor = EXCLUDED.floor, type = EXCLUDED.type
-       RETURNING id`,
+       ON CONFLICT (name) DO UPDATE SET floor = EXCLUDED.floor, type = EXCLUDED.type`,
       [name, floor, type]
     );
-    await seedRoomChecklists(client, rows[0].id, name, type);
+    // seedRoomChecklists ya NO se llama aquí: la checklist de cada sitio es cosa de
+    // quien administra el hotel (botón editar/eliminar en la ficha), no un catálogo
+    // que un sync rutinario resucite solo.
   }
 
   await pruneRooms(client);

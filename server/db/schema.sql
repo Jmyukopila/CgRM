@@ -245,9 +245,10 @@ ALTER TABLE users ADD CONSTRAINT users_role_check
   CHECK (role IN ('empleado','jefe','admin'));
 ALTER TABLE users ADD CONSTRAINT users_area_check
   CHECK (area IS NULL OR area IN ('limpieza','mantenimiento','recepcion','cocina','lavanderia','administracion'));
--- Un empleado sin área no tendría nada que ver ni nadie a quien responder.
-ALTER TABLE users ADD CONSTRAINT users_area_required_check
-  CHECK (role != 'empleado' OR area IS NOT NULL);
+-- Un empleado sin área no tendría nada que ver ni nadie a quien responder... salvo
+-- que sea justo eso: una cuenta genérica que ve y trabaja TODAS las áreas (ver
+-- seesAllAreas en permissions.js). Por eso esta constraint ya no aplica.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_area_required_check;
 
 -- tasks: área dueña del trabajo, estado 'rechazada' y traza de revisión.
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS area text;
